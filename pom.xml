@@ -109,7 +109,6 @@
         <module>distributed</module>
         <module>graphdb</module>
         <module>distribution</module>
-        <module>token-auth-jwt</module>
     </modules>
 
     <scm>
