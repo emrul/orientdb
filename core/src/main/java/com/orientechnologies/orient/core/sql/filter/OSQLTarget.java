@@ -1,22 +1,22 @@
 /*
-  *
-  *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-  *  *
-  *  *  Licensed under the Apache License, Version 2.0 (the "License");
-  *  *  you may not use this file except in compliance with the License.
-  *  *  You may obtain a copy of the License at
-  *  *
-  *  *       http://www.apache.org/licenses/LICENSE-2.0
-  *  *
-  *  *  Unless required by applicable law or agreed to in writing, software
-  *  *  distributed under the License is distributed on an "AS IS" BASIS,
-  *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  *  *  See the License for the specific language governing permissions and
-  *  *  limitations under the License.
-  *  *
-  *  * For more information: http://www.orientechnologies.com
-  *
-  */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 package com.orientechnologies.orient.core.sql.filter;
 
 import com.orientechnologies.common.parser.OBaseParser;
@@ -36,8 +36,11 @@ import com.orientechnologies.orient.core.sql.OCommandSQLParsingException;
 import com.orientechnologies.orient.core.sql.OCommandSQLResultset;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -47,24 +50,24 @@ import java.util.Map;
  * 
  */
 public class OSQLTarget extends OBaseParser {
-  protected final boolean                        empty;
-  protected final OCommandContext                context;
-  protected String                               targetVariable;
-  protected OCommandExecutorSQLResultsetDelegate targetQuery;
-  protected Iterable<? extends OIdentifiable>    targetRecords;
-  protected Map<String, String>                  targetClusters;
-  protected Map<OClass, String>                  targetClasses;
+  protected final boolean                     empty;
+  protected final OCommandContext             context;
+  protected String                            targetVariable;
+  protected String                            targetQuery;
+  protected Iterable<? extends OIdentifiable> targetRecords;
+  protected Map<String, String>               targetClusters;
+  protected Map<OClass, String>               targetClasses;
 
-  protected String                               targetIndex;
+  protected String                            targetIndex;
 
-  protected String                               targetIndexValues;
-  protected boolean                              targetIndexValuesAsc;
+  protected String                            targetIndexValues;
+  protected boolean                           targetIndexValuesAsc;
 
   public OSQLTarget(final String iText, final OCommandContext iContext, final String iFilterKeyword) {
     super();
     context = iContext;
     parserText = iText;
-    parserTextUpperCase = iText.toUpperCase();
+    parserTextUpperCase = upperCase(iText);
 
     try {
       empty = !extractTargets();
@@ -80,6 +83,20 @@ public class OSQLTarget extends OBaseParser {
     }
   }
 
+  protected String upperCase(String text) {
+    // TODO remove and refactor (see same method in OCommandExecutorAbstract)
+    StringBuilder result = new StringBuilder(text.length());
+    for (char c : text.toCharArray()) {
+      String upper = ("" + c).toUpperCase(Locale.ENGLISH);
+      if (upper.length() > 1) {
+        result.append(c);
+      } else {
+        result.append(upper);
+      }
+    }
+    return result.toString();
+  }
+
   public Map<String, String> getTargetClusters() {
     return targetClusters;
   }
@@ -92,7 +109,7 @@ public class OSQLTarget extends OBaseParser {
     return targetRecords;
   }
 
-  public OCommandExecutorSQLResultsetDelegate getTargetQuery() {
+  public String getTargetQuery() {
     return targetQuery;
   }
 
@@ -163,14 +180,17 @@ public class OSQLTarget extends OBaseParser {
           .getExecutor(subCommand);
       executor.setProgressListener(subCommand.getProgressListener());
       executor.parse(subCommand);
-      context.setChild(executor.getContext());
+      OCommandContext childContext = executor.getContext();
+      if(childContext!=null) {
+        childContext.setParent(context);
+      }
 
       if (!(executor instanceof Iterable<?>))
         throw new OCommandSQLParsingException("Sub-query cannot be iterated because doesn't implement the Iterable interface: "
             + subCommand);
 
-      targetQuery = executor;
-      targetRecords = (Iterable<? extends OIdentifiable>) executor;
+      targetQuery = subText.toString();
+      targetRecords = executor;
 
     } else if (c == OStringSerializerHelper.LIST_BEGIN) {
       // COLLECTION OF RIDS
@@ -184,7 +204,8 @@ public class OSQLTarget extends OBaseParser {
       parserMoveCurrentPosition(1);
     } else {
 
-      while (!parserIsEnded() && (targetClasses == null && targetClusters == null && targetIndex == null && targetIndexValues == null)) {
+      while (!parserIsEnded()
+          && (targetClasses == null && targetClusters == null && targetIndex == null && targetIndexValues == null && targetRecords == null)) {
         String originalSubjectName = parserRequiredWord(false, "Target not found");
         String subjectName = originalSubjectName.toUpperCase();
 
@@ -199,7 +220,15 @@ public class OSQLTarget extends OBaseParser {
           // REGISTER AS CLUSTER
           if (targetClusters == null)
             targetClusters = new HashMap<String, String>();
-          targetClusters.put(subjectName.substring(OCommandExecutorSQLAbstract.CLUSTER_PREFIX.length()), alias);
+          final String clusterNames = subjectName.substring(OCommandExecutorSQLAbstract.CLUSTER_PREFIX.length());
+          if (clusterNames.startsWith("[") && clusterNames.endsWith("]")) {
+            final Collection<String> clusters = new HashSet<String>(3);
+            OStringSerializerHelper.getCollection(clusterNames, 0, clusters);
+            for (String cl : clusters) {
+              targetClusters.put(cl, cl);
+            }
+          } else
+            targetClusters.put(clusterNames, alias);
 
         } else if (subjectToMatch.startsWith(OCommandExecutorSQLAbstract.INDEX_PREFIX)) {
           // REGISTER AS INDEX

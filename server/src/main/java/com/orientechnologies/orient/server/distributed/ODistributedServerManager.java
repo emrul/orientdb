@@ -1,105 +1,120 @@
 /*
-     *
-     *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-     *  *
-     *  *  Licensed under the Apache License, Version 2.0 (the "License");
-     *  *  you may not use this file except in compliance with the License.
-     *  *  You may obtain a copy of the License at
-     *  *
-     *  *       http://www.apache.org/licenses/LICENSE-2.0
-     *  *
-     *  *  Unless required by applicable law or agreed to in writing, software
-     *  *  distributed under the License is distributed on an "AS IS" BASIS,
-     *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-     *  *  See the License for the specific language governing permissions and
-     *  *  limitations under the License.
-     *  *
-     *  * For more information: http://www.orientechnologies.com
-     *
-     */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 package com.orientechnologies.orient.server.distributed;
 
+import com.orientechnologies.orient.core.db.ODatabaseInternal;
 import com.orientechnologies.orient.core.record.impl.ODocument;
- import com.orientechnologies.orient.server.distributed.ODistributedRequest.EXECUTION_MODE;
- import com.orientechnologies.orient.server.distributed.conflict.OReplicationConflictResolver;
- import com.orientechnologies.orient.server.distributed.task.OAbstractRemoteTask;
+import com.orientechnologies.orient.server.distributed.ODistributedRequest.EXECUTION_MODE;
+import com.orientechnologies.orient.server.distributed.task.OAbstractRemoteTask;
 
- import java.util.Collection;
- import java.util.Map;
- import java.util.concurrent.locks.Lock;
+import java.util.Collection;
+import java.util.Map;
+import java.util.concurrent.locks.Lock;
 
 /**
-  * Server cluster interface to abstract cluster behavior.
-  *
-  * @author Luca Garulli (l.garulli--at--orientechnologies.com)
-  *
-  */
- public interface ODistributedServerManager {
+ * Server cluster interface to abstract cluster behavior.
+ *
+ * @author Luca Garulli (l.garulli--at--orientechnologies.com)
+ *
+ */
+public interface ODistributedServerManager {
 
-   public enum NODE_STATUS {
-     OFFLINE, STARTING, ONLINE, SHUTDOWNING
-   };
+  enum NODE_STATUS {
+    OFFLINE, STARTING, ONLINE, SHUTTINGDOWN
+  };
 
-   public enum DB_STATUS {
-     OFFLINE, SYNCHRONIZING, ONLINE
-   };
+  enum DB_STATUS {
+    OFFLINE, SYNCHRONIZING, ONLINE, BACKUP
+  };
 
-   public boolean isEnabled();
+  boolean isEnabled();
 
-   public Map<String, Object> getConfigurationMap();
+  ODistributedServerManager registerLifecycleListener(ODistributedLifecycleListener iListener);
 
-   public long getLastClusterChangeOn();
+  ODistributedServerManager unregisterLifecycleListener(ODistributedLifecycleListener iListener);
 
-   public NODE_STATUS getNodeStatus();
+  Map<String, Object> getConfigurationMap();
 
-   public void setNodeStatus(NODE_STATUS iStatus);
+  long getLastClusterChangeOn();
 
-   public boolean checkNodeStatus(NODE_STATUS string);
+  NODE_STATUS getNodeStatus();
 
-   public DB_STATUS getDatabaseStatus(final String iNode, final String iDatabaseName);
+  void setNodeStatus(NODE_STATUS iStatus);
 
-   public void setDatabaseStatus(final String iNode, final String iDatabaseName, DB_STATUS iStatus);
+  boolean checkNodeStatus(NODE_STATUS string);
 
-   public ODistributedMessageService getMessageService();
+  DB_STATUS getDatabaseStatus(String iNode, String iDatabaseName);
 
-   public void updateLastClusterChange();
+  void setDatabaseStatus(String iNode, String iDatabaseName, DB_STATUS iStatus);
 
-   public boolean isNodeAvailable(final String iNodeName, String databaseName);
+  ODistributedMessageService getMessageService();
 
-   public boolean isOffline();
+  void updateLastClusterChange();
 
-   public String getLocalNodeId();
+  /**
+   * Available means not OFFLINE, so ONLINE or SYNCHRONIZING.
+   */
+  boolean isNodeAvailable(String iNodeName, String databaseName);
 
-   public String getLocalNodeName();
+  /**
+   * Returns true if the node status is ONLINE.
+   */
+  boolean isNodeOnline(String iNodeName, String databaseName);
 
-   public ODocument getClusterConfiguration();
+  boolean isOffline();
 
-   public ODocument getNodeConfigurationById(String iNode);
+  String getLocalNodeId();
 
-   public ODocument getLocalNodeConfiguration();
+  String getLocalNodeName();
 
-   /**
-    * Returns a time taking care about the offset with the cluster time. This allows to have a quite precise idea about information
-    * on date times, such as logs to determine the youngest in case of conflict.
-    *
-    * @return
-    */
-   public long getDistributedTime(long iTme);
+  ODocument getClusterConfiguration();
 
-   /**
-    * Gets a distributed lock
-    *
-    * @param iLockName
-    *          name of the lock
-    * @return
-    */
-   public Lock getLock(String iLockName);
+  ODocument getNodeConfigurationById(String iNode);
 
-   public Class<? extends OReplicationConflictResolver> getConfictResolverClass();
+  ODocument getLocalNodeConfiguration();
 
-   public ODistributedConfiguration getDatabaseConfiguration(String iDatabaseName);
+  void propagateSchemaChanges(ODatabaseInternal iStorage);
 
-   public Object sendRequest(String iDatabaseName, Collection<String> iClusterNames, Collection<String> iTargetNodeNames, OAbstractRemoteTask iTask, EXECUTION_MODE iExecutionMode);
+  /**
+   * Returns a time taking care about the offset with the cluster time. This allows to have a quite precise idea about information
+   * on date times, such as logs to determine the youngest in case of conflict.
+   *
+   * @return
+   */
+  long getDistributedTime(long iTme);
 
-   public ODocument getStats();
- }
+  /**
+   * Gets a distributed lock
+   *
+   * @param iLockName
+   *          name of the lock
+   * @return
+   */
+  Lock getLock(String iLockName);
+
+  ODistributedConfiguration getDatabaseConfiguration(String iDatabaseName);
+
+  Object sendRequest(String iDatabaseName, Collection<String> iClusterNames, Collection<String> iTargetNodeNames,
+      OAbstractRemoteTask iTask, EXECUTION_MODE iExecutionMode);
+
+  ODocument getStats();
+
+  Throwable convertException(Throwable original);
+}

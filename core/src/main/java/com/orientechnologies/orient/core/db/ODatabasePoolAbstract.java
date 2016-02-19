@@ -19,8 +19,15 @@
  */
 package com.orientechnologies.orient.core.db;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import com.orientechnologies.common.concur.lock.OAdaptiveLock;
 import com.orientechnologies.common.concur.lock.OLockException;
@@ -40,7 +47,7 @@ public abstract class ODatabasePoolAbstract<DB extends ODatabaseInternal> extend
   protected Object                                                  owner;
   private int                                                       maxSize;
   private int                                                       timeout;
-  private Timer                                                     evictionTask;
+  private volatile Timer                                            evictionTask;
   private Evictor                                                   evictor;
 
   /**
@@ -232,10 +239,6 @@ public abstract class ODatabasePoolAbstract<DB extends ODatabaseInternal> extend
       this.notifyEvictor(dbPooledName, iDatabase);
   }
 
-  public DB reuseResource(final String iKey, final DB iValue) {
-    return iValue;
-  }
-
   public Map<String, OReentrantResourcePool<String, DB>> getPools() {
     lock();
     try {
@@ -292,6 +295,7 @@ public abstract class ODatabasePoolAbstract<DB extends ODatabaseInternal> extend
           if (stg != null && stg.getStatus() == OStorage.STATUS.OPEN)
             try {
               OLogManager.instance().debug(this, "Closing pooled database '%s'...", db.getName());
+              db.activateOnCurrentThread();
               ((ODatabasePooled) db).forceClose();
               OLogManager.instance().debug(this, "OK", db.getName());
             } catch (Exception e) {
@@ -342,6 +346,11 @@ public abstract class ODatabasePoolAbstract<DB extends ODatabaseInternal> extend
     } finally {
       unlock();
     }
+  }
+
+  @Override
+  public void onShutdown() {
+    close();
   }
 
   private void notifyEvictor(final String poolName, final DB iDatabase) {

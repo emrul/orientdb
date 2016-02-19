@@ -19,10 +19,6 @@
  */
 package com.orientechnologies.orient.server.network.protocol.binary;
 
-import java.io.IOException;
-import java.net.Socket;
-import java.util.logging.Level;
-
 import com.orientechnologies.common.exception.OException;
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.orient.core.Orient;
@@ -42,6 +38,7 @@ import com.orientechnologies.orient.core.exception.OSerializationException;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.id.ORecordId;
 import com.orientechnologies.orient.core.metadata.security.ORole;
+import com.orientechnologies.orient.core.metadata.security.OToken;
 import com.orientechnologies.orient.core.metadata.security.OUser;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.ORecordInternal;
@@ -62,8 +59,13 @@ import com.orientechnologies.orient.enterprise.channel.binary.OChannelBinaryProt
 import com.orientechnologies.orient.enterprise.channel.binary.OChannelBinaryServer;
 import com.orientechnologies.orient.enterprise.channel.binary.ONetworkProtocolException;
 import com.orientechnologies.orient.server.OServer;
+import com.orientechnologies.orient.server.OTokenHandler;
 import com.orientechnologies.orient.server.network.OServerNetworkListener;
 import com.orientechnologies.orient.server.network.protocol.ONetworkProtocol;
+
+import java.io.IOException;
+import java.net.Socket;
+import java.util.logging.Level;
 
 /**
  * Abstract base class for binary network implementations.
@@ -75,9 +77,11 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
   protected final Level          logClientExceptions;
   protected final boolean        logClientFullStackTrace;
   protected OChannelBinaryServer channel;
-  protected int                  requestType;
+  protected volatile int         requestType;
   protected int                  clientTxId;
+  protected OToken               token;
   protected boolean              okSent;
+  protected OTokenHandler        tokenHandler;
 
   public OBinaryNetworkProtocolAbstract(final String iThreadName) {
     super(Orient.instance().getThreadGroup(), iThreadName);
@@ -90,6 +94,14 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
       final OContextConfiguration iConfig) throws IOException {
     server = iServer;
     channel = new OChannelBinaryServer(iSocket, iConfig);
+
+    try {
+      tokenHandler = server.getPlugin(OTokenHandler.TOKEN_HANDLER_NAME);
+      if (tokenHandler != null && !tokenHandler.isEnabled())
+        tokenHandler = null;
+    } catch (ODatabaseException e) {
+      OLogManager.instance().debug(this, "Error on retrieving plugin '%s'", e, OTokenHandler.TOKEN_HANDLER_NAME);
+    }
   }
 
   @Override
@@ -185,6 +197,10 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
   protected void execute() throws Exception {
     requestType = -1;
 
+    // do not remove this or we will get deadlock upon shutdown.
+    if (isShutdownFlag())
+      return;
+
     clientTxId = 0;
     okSent = false;
     long timer = 0;
@@ -194,8 +210,14 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
       clientTxId = channel.readInt();
 
       timer = Orient.instance().getProfiler().startChrono();
-
-      onBeforeRequest();
+      try {
+        onBeforeRequest();
+      } catch (Exception e) {
+        sendError(clientTxId, e);
+        handleConnectionError(channel, e);
+        sendShutdown();
+        return;
+      }
 
       try {
         if (!executeRequest()) {
@@ -217,8 +239,8 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
     } catch (Throwable t) {
       sendErrorOrDropConnection(clientTxId, t);
     } finally {
-      Orient.instance().getProfiler()
-          .stopChrono("server.network.requests", "Total received requests", timer, "server.network.requests");
+      Orient.instance().getProfiler().stopChrono("server.network.requests", "Total received requests", timer,
+          "server.network.requests");
 
       OSerializationThreadLocal.INSTANCE.get().clear();
     }
@@ -235,6 +257,7 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
       handleConnectionError(channel, t);
       sendShutdown();
     } else {
+      okSent = true;
       sendError(iClientTxId, t);
     }
   }
@@ -262,12 +285,9 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
       }
     }
 
-    OLogManager.instance().info(
-        this,
-        "Created database '%s' of type '%s'",
-        iDatabase.getName(),
-        iDatabase.getStorage().getUnderlying() instanceof OAbstractPaginatedStorage ? iDatabase.getStorage().getUnderlying()
-            .getType() : "memory");
+    OLogManager.instance().info(this, "Created database '%s' of type '%s'", iDatabase.getName(),
+        iDatabase.getStorage().getUnderlying() instanceof OAbstractPaginatedStorage
+            ? iDatabase.getStorage().getUnderlying().getType() : "memory");
 
     // if (iDatabase.getStorage() instanceof OStorageLocal)
     // // CLOSE IT BECAUSE IT WILL BE OPEN AT FIRST USE
@@ -276,6 +296,15 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
     return iDatabase;
   }
 
+  /**
+   * Returns a database instance giving the database name, the database type and storage type.
+   * 
+   * @param dbName
+   * @param dbType
+   * @param storageType
+   *          Storage type between "plocal" or "memory".
+   * @return
+   */
   protected ODatabaseDocumentTx getDatabaseInstance(final String dbName, final String dbType, final String storageType) {
     String path;
 
@@ -305,11 +334,16 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
 
       iDatabase.delete(rid, version);
       return 1;
+    } catch (ORecordNotFoundException e) {
+      // MAINTAIN COHERENT THE BEHAVIOR FOR ALL THE STORAGE TYPES
+      if (e.getCause() instanceof OOfflineClusterException)
+        throw (OOfflineClusterException) e.getCause();
     } catch (OOfflineClusterException e) {
       throw e;
     } catch (Exception e) {
-      return 0;
+      // IGNORE IT
     }
+    return 0;
   }
 
   protected int hideRecord(final ODatabaseDocument iDatabase, final ORID rid) {
@@ -341,9 +375,15 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
 
     ORecordInternal.setContentChanged(newRecord, updateContent);
 
-    final ORecord currentRecord;
+    ORecord currentRecord = null;
     if (newRecord instanceof ODocument) {
-      currentRecord = iDatabase.load(rid);
+      try {
+        currentRecord = iDatabase.load(rid);
+      } catch (ORecordNotFoundException e) {
+        // MAINTAIN COHERENT THE BEHAVIOR FOR ALL THE STORAGE TYPES
+        if (e.getCause() instanceof OOfflineClusterException)
+          throw (OOfflineClusterException) e.getCause();
+      }
 
       if (currentRecord == null)
         throw new ORecordNotFoundException(rid.toString());
@@ -369,10 +409,11 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
     try {
       channel.flush();
     } catch (IOException e1) {
+      OLogManager.instance().debug(this, "Error during channel flush", e1);
     }
   }
 
-  protected byte[] getRecordBytes(final ORecord iRecord) {
+  public byte[] getRecordBytes(final ORecord iRecord) {
 
     final byte[] stream;
     try {
@@ -398,6 +439,10 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
   protected abstract String getRecordSerializerName();
 
   private void writeRecord(final ORecord iRecord) throws IOException {
+    if (iRecord.isDirty())
+      // AVOID ANY RECORD SAVING
+      ORecordInternal.unsetDirty(iRecord);
+
     channel.writeShort((short) 0);
     channel.writeByte(ORecordInternal.getRecordType(iRecord));
     channel.writeRID(iRecord.getIdentity());
@@ -405,21 +450,8 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
     try {
       final byte[] stream = getRecordBytes(iRecord);
 
-      int realLength = stream.length;
-      // TODO: This Logic should not be here provide an api in the Serializer for ask for trimmed content.
-      final ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.INSTANCE.getIfDefined();
-      if (db != null && db instanceof ODatabaseDocument) {
-        if (db.getSerializer() instanceof ORecordSerializerSchemaAware2CSV) {
-          // TRIM TAILING SPACES (DUE TO OVERSIZE)
-          for (int i = stream.length - 1; i > -1; --i) {
-            if (stream[i] == 32)
-              --realLength;
-            else
-              break;
-          }
-
-        }
-      }
+      // TODO: This Logic should not be here provide an api in the Serializer if asked for trimmed content.
+      int realLength = trimCsvSerializedContent(stream);
 
       channel.writeBytes(stream, realLength);
     } catch (Exception e) {
@@ -429,6 +461,28 @@ public abstract class OBinaryNetworkProtocolAbstract extends ONetworkProtocol {
 
       throw new OSerializationException(message, e);
     }
+  }
+
+  protected int trimCsvSerializedContent(final byte[] stream) {
+    int realLength = stream.length;
+    final ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.INSTANCE.getIfDefined();
+    if (db != null && db instanceof ODatabaseDocument) {
+      if (ORecordSerializerSchemaAware2CSV.NAME.equals(getRecordSerializerName())) {
+        // TRIM TAILING SPACES (DUE TO OVERSIZE)
+        for (int i = stream.length - 1; i > -1; --i) {
+          if (stream[i] == 32)
+            --realLength;
+          else
+            break;
+        }
+
+      }
+    }
+    return realLength;
+  }
+
+  public int getRequestType() {
+    return requestType;
   }
 
 }

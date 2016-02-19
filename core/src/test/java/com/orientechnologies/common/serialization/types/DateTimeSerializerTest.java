@@ -17,6 +17,7 @@
 package com.orientechnologies.common.serialization.types;
 
 import com.orientechnologies.common.directmemory.ODirectMemoryPointer;
+import com.orientechnologies.common.directmemory.ODirectMemoryPointerFactory;
 import org.testng.Assert;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -24,7 +25,7 @@ import org.testng.annotations.Test;
 import java.util.Date;
 
 /**
- * @author ibershadskiy <a href="mailto:ibersh20@gmail.com">Ilya Bershadskiy</a>
+ * @author Ilya Bershadskiy (ibersh20-at-gmail.com)
  * @since 20.01.12
  */
 @Test
@@ -56,7 +57,7 @@ public class DateTimeSerializerTest {
   public void testNativeDirectMemoryCompatibility() {
     dateTimeSerializer.serializeNativeObject(OBJECT, stream, 0);
 
-    ODirectMemoryPointer pointer = new ODirectMemoryPointer(stream);
+    ODirectMemoryPointer pointer = ODirectMemoryPointerFactory.instance().createPointer(stream);
     try {
       Assert.assertEquals(dateTimeSerializer.deserializeFromDirectMemoryObject(pointer, 0), OBJECT);
     } finally {

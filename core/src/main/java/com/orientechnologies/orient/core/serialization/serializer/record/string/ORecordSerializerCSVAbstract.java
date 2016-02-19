@@ -19,9 +19,6 @@
  */
 package com.orientechnologies.orient.core.serialization.serializer.record.string;
 
-import java.util.*;
-import java.util.Map.Entry;
-
 import com.orientechnologies.common.collection.OLazyIterator;
 import com.orientechnologies.common.collection.OMultiCollectionIterator;
 import com.orientechnologies.common.collection.OMultiValue;
@@ -40,20 +37,30 @@ import com.orientechnologies.orient.core.db.record.*;
 import com.orientechnologies.orient.core.db.record.ORecordElement.STATUS;
 import com.orientechnologies.orient.core.db.record.ridbag.ORidBag;
 import com.orientechnologies.orient.core.entity.OEntityManagerInternal;
+import com.orientechnologies.orient.core.exception.ODatabaseException;
 import com.orientechnologies.orient.core.exception.OSerializationException;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.id.ORecordId;
+import com.orientechnologies.orient.core.metadata.OMetadataInternal;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.record.impl.ODocumentInternal;
 import com.orientechnologies.orient.core.serialization.ODocumentSerializable;
+import com.orientechnologies.orient.core.serialization.serializer.ONetworkThreadLocalSerializer;
 import com.orientechnologies.orient.core.serialization.serializer.OStringSerializerHelper;
 import com.orientechnologies.orient.core.serialization.serializer.object.OObjectSerializerHelperManager;
 import com.orientechnologies.orient.core.serialization.serializer.string.OStringBuilderSerializable;
 import com.orientechnologies.orient.core.serialization.serializer.string.OStringSerializerEmbedded;
 import com.orientechnologies.orient.core.type.tree.OMVRBTreeRIDSet;
+
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
 
 @SuppressWarnings({ "unchecked", "serial" })
 public abstract class ORecordSerializerCSVAbstract extends ORecordSerializerStringAbstract {
@@ -84,6 +91,8 @@ public abstract class ORecordSerializerCSVAbstract extends ORecordSerializerStri
       if (rid.isValid() && rid.isNew()) {
         // SAVE AT THE FLY AND STORE THE NEW RID
         final ORecord record = rid.getRecord();
+        if (ONetworkThreadLocalSerializer.getNetworkSerializer() != null)
+          throw new ODatabaseException("Impossible save a record during network serialization");
 
         final ODatabaseDocument database = ODatabaseRecordThreadLocal.INSTANCE.get();
         if (record != null) {
@@ -112,12 +121,16 @@ public abstract class ORecordSerializerCSVAbstract extends ORecordSerializerStri
       rid = iLinkedRecord.getIdentity();
 
       if ((rid.isNew() && !rid.isTemporary()) || iLinkedRecord.isDirty()) {
+        if (ONetworkThreadLocalSerializer.getNetworkSerializer() != null)
+          throw new ODatabaseException("Impossible save a record during network serialization");
+
         final ODatabaseDocumentInternal database = ODatabaseRecordThreadLocal.INSTANCE.get();
         if (iLinkedRecord instanceof ODocument) {
-          final OClass schemaClass = ((ODocument) iLinkedRecord).getImmutableSchemaClass();
-          database.save(iLinkedRecord,
-              schemaClass != null ? database.getClusterNameById(schemaClass.getClusterForNewInstance((ODocument) iLinkedRecord))
-                  : null);
+          final OClass schemaClass = ODocumentInternal.getImmutableSchemaClass(((ODocument) iLinkedRecord));
+          database.save(
+              iLinkedRecord,
+              schemaClass != null && database.getStorage().isAssigningClusterIds() ? database.getClusterNameById(schemaClass
+                  .getClusterForNewInstance((ODocument) iLinkedRecord)) : null);
         } else
           // STORE THE TRAVERSED OBJECT TO KNOW THE RECORD ID. CALL THIS VERSION TO AVOID CLEAR OF STACK IN THREAD-LOCAL
           database.save(iLinkedRecord);
@@ -203,7 +216,8 @@ public abstract class ORecordSerializerCSVAbstract extends ORecordSerializerStri
       if (iValue.length() > 1) {
         int pos = iValue.indexOf(OStringSerializerHelper.CLASS_SEPARATOR);
         if (pos > -1)
-          ODatabaseRecordThreadLocal.INSTANCE.get().getMetadata().getImmutableSchemaSnapshot().getClass(iValue.substring(1, pos));
+          ((OMetadataInternal) ODatabaseRecordThreadLocal.INSTANCE.get().getMetadata()).getImmutableSchemaSnapshot().getClass(
+              iValue.substring(1, pos));
         else
           pos = 0;
 
@@ -321,7 +335,7 @@ public abstract class ORecordSerializerCSVAbstract extends ORecordSerializerStri
 
   public void fieldToStream(final ODocument iRecord, final StringBuilder iOutput, OUserObject2RecordHandler iObjHandler,
       final OType iType, final OClass iLinkedClass, final OType iLinkedType, final String iName, final Object iValue,
-      final Set<ODocument> iMarshalledRecords, final boolean iSaveOnlyDirty) {
+      final Map<ODocument, Boolean> iMarshalledRecords, final boolean iSaveOnlyDirty) {
     if (iValue == null)
       return;
 
@@ -427,6 +441,8 @@ public abstract class ORecordSerializerCSVAbstract extends ORecordSerializerStri
       final OStringBuilderSerializable coll;
 
       if (!(iValue instanceof OMVRBTreeRIDSet)) {
+        if(iValue instanceof OAutoConvertToRecord)
+          ((OAutoConvertToRecord)iValue).setAutoConvertToRecord(false);
         // FIRST TIME: CONVERT THE ENTIRE COLLECTION
         coll = new OMVRBTreeRIDSet(iRecord, (Collection<OIdentifiable>) iValue);
 
@@ -543,7 +559,7 @@ public abstract class ORecordSerializerCSVAbstract extends ORecordSerializerStri
   }
 
   public void embeddedMapToStream(ODatabase<?> iDatabase, final OUserObject2RecordHandler iObjHandler, final StringBuilder iOutput,
-      final OClass iLinkedClass, OType iLinkedType, final Object iValue, final Set<ODocument> iMarshalledRecords,
+      final OClass iLinkedClass, OType iLinkedType, final Object iValue, final Map<ODocument, Boolean> iMarshalledRecords,
       final boolean iSaveOnlyDirty) {
     iOutput.append(OStringSerializerHelper.MAP_BEGIN);
 
@@ -717,7 +733,7 @@ public abstract class ORecordSerializerCSVAbstract extends ORecordSerializerStri
 
   public StringBuilder embeddedCollectionToStream(ODatabase<?> iDatabase, final OUserObject2RecordHandler iObjHandler,
       final StringBuilder iOutput, final OClass iLinkedClass, final OType iLinkedType, final Object iValue,
-      final Set<ODocument> iMarshalledRecords, final boolean iSaveOnlyDirty, final boolean iSet) {
+      final Map<ODocument, Boolean> iMarshalledRecords, final boolean iSaveOnlyDirty, final boolean iSet) {
     iOutput.append(iSet ? OStringSerializerHelper.SET_BEGIN : OStringSerializerHelper.LIST_BEGIN);
 
     final Iterator<Object> iterator = OMultiValue.getMultiValueIterator(iValue);
@@ -763,10 +779,14 @@ public abstract class ORecordSerializerCSVAbstract extends ORecordSerializerStri
         if (id instanceof ODocument) {
           doc = (ODocument) id;
 
-          if (id.getIdentity().isTemporary())
-            doc.save();
+          if (id.getIdentity().isTemporary()) {
+            if (ONetworkThreadLocalSerializer.getNetworkSerializer() != null)
+              throw new ODatabaseException("Impossible save a record during network serialization");
 
-          linkedClass = doc.getImmutableSchemaClass();
+            doc.save();
+          }
+
+          linkedClass = ODocumentInternal.getImmutableSchemaClass(doc);
         } else
           linkedClass = null;
       }

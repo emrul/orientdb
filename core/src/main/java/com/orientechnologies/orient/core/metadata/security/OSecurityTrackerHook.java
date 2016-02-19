@@ -1,18 +1,22 @@
 package com.orientechnologies.orient.core.metadata.security;
 
+import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.hook.ODocumentHookAbstract;
+import com.orientechnologies.orient.core.metadata.schema.OImmutableClass;
 import com.orientechnologies.orient.core.record.impl.ODocument;
+import com.orientechnologies.orient.core.record.impl.ODocumentInternal;
 
 import java.lang.ref.WeakReference;
 
 /**
- * @author Andrey Lomakin <a href="mailto:lomakin.andrey@gmail.com">Andrey Lomakin</a>
+ * @author Andrey Lomakin (a.lomakin-at-orientechnologies.com)
  * @since 04/11/14
  */
 public class OSecurityTrackerHook extends ODocumentHookAbstract {
   private final WeakReference<OSecurity> security;
 
-  public OSecurityTrackerHook(OSecurity security) {
+  public OSecurityTrackerHook(OSecurity security, ODatabaseDocument database) {
+    super(database);
     this.security = new WeakReference<OSecurity>(security);
   }
 
@@ -52,10 +56,11 @@ public class OSecurityTrackerHook extends ODocumentHookAbstract {
   }
 
   private void incrementSchemaVersion(ODocument doc) {
-		if (doc.getImmutableSchemaClass() == null)
-			return;
+    OImmutableClass immutableClass = ODocumentInternal.getImmutableSchemaClass(doc);
+    if (immutableClass == null)
+      return;
 
-    final String className = doc.getImmutableSchemaClass().getName();
+    final String className = immutableClass.getName();
 
     if (className.equalsIgnoreCase(OUser.CLASS_NAME) || className.equalsIgnoreCase(ORole.CLASS_NAME)) {
       final OSecurity scr = security.get();

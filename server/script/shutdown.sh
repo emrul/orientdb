@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # Copyright (c) Orient Technologies LTD (http://www.orientechnologies.com)
 #
@@ -31,8 +31,9 @@ done
 PRGDIR=`dirname "$PRG"`
 
 # Only set ORIENTDB_HOME if not already set
-[ -f "$ORIENTDB_HOME"/bin/orient.sh ] || ORIENTDB_HOME=`cd "$PRGDIR/.." ; pwd`
+[ -f "$ORIENTDB_HOME"/bin/server.sh ] || ORIENTDB_HOME=`cd "$PRGDIR/.." ; pwd`
 export ORIENTDB_HOME
+cd "$ORIENTDB_HOME/bin"
 
 if [ ! -f "${CONFIG_FILE}" ]
 then
@@ -56,7 +57,7 @@ JAVA_OPTS=-Djava.awt.headless=true
 
 if [ "x$wait" = "xyes" ] ; then
   while true ; do
-    ps -ef | grep java | grep $ORIENTDB_HOME/lib/orientdb-server > /dev/null || break
+        ps auxw | grep java | grep $ORIENTDB_HOME/lib/orientdb-server > /dev/null || break
     sleep 1;
   done
 fi

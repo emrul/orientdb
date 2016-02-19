@@ -2,6 +2,7 @@ package com.tinkerpop.blueprints.impls.orient;
 
 import com.orientechnologies.orient.client.remote.OServerAdmin;
 import com.orientechnologies.orient.core.Orient;
+import com.orientechnologies.orient.core.config.OGlobalConfiguration;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.server.OServer;
 import com.orientechnologies.orient.server.OServerMain;
@@ -31,7 +32,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * @author Andrey Lomakin <a href="mailto:lomakin.andrey@gmail.com">Andrey Lomakin</a>
+ * @author Andrey Lomakin (a.lomakin-at-orientechnologies.com)
  * @since 2/6/14
  */
 @RunWith(JUnit4.class)
@@ -76,7 +77,7 @@ public class OrientGraphNoTxRemoteTest extends GraphTest {
 
     final File file = new File(serverHome);
     deleteDirectory(file);
-
+    OGlobalConfiguration.NETWORK_LOCK_TIMEOUT.setValue(15000);
     Orient.instance().startup();
   }
 
@@ -168,6 +169,7 @@ public class OrientGraphNoTxRemoteTest extends GraphTest {
 
     graph = factory.getNoTx();
     graph.setWarnOnForceClosingTx(false);
+    graph.setStandardExceptions(true);
 
     currentGraphs.put(url, graph);
 

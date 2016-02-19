@@ -15,13 +15,8 @@
  */
 package com.orientechnologies.orient.test.database.auto;
 
-import java.io.IOException;
-
-import org.testng.Assert;
-import org.testng.annotations.Optional;
-import org.testng.annotations.Parameters;
-import org.testng.annotations.Test;
-
+import com.orientechnologies.orient.core.command.OCommandExecutor;
+import com.orientechnologies.orient.core.command.OCommandRequestText;
 import com.orientechnologies.orient.core.db.ODatabase;
 import com.orientechnologies.orient.core.db.ODatabaseListener;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
@@ -34,6 +29,12 @@ import com.orientechnologies.orient.core.record.impl.ORecordFlat;
 import com.orientechnologies.orient.core.sql.OCommandSQL;
 import com.orientechnologies.orient.core.storage.ORecordDuplicatedException;
 import com.orientechnologies.orient.enterprise.channel.binary.OResponseProcessingException;
+import org.testng.Assert;
+import org.testng.annotations.Optional;
+import org.testng.annotations.Parameters;
+import org.testng.annotations.Test;
+
+import java.io.IOException;
 
 @Test(groups = "dictionary")
 public class TransactionAtomicTest extends DocumentDBBaseTest {
@@ -55,17 +56,24 @@ public class TransactionAtomicTest extends DocumentDBBaseTest {
 
     // RE-READ THE RECORD
     record1.reload();
+
+    db2.activateOnCurrentThread();
     ORecordFlat record2 = db2.load(record1.getIdentity());
 
     record2.value("This is the second version").save();
     record2.value("This is the third version").save();
 
+    db1.activateOnCurrentThread();
     record1.reload(null, true);
 
     Assert.assertEquals(record1.value(), "This is the third version");
 
     db1.close();
+
+    db2.activateOnCurrentThread();
     db2.close();
+
+    database.activateOnCurrentThread();
   }
 
   @Test
@@ -88,15 +96,12 @@ public class TransactionAtomicTest extends DocumentDBBaseTest {
     }
   }
 
-  @Test(expectedExceptions = OTransactionException.class)
+  @Test
   public void testTransactionPreListenerRollback() throws IOException {
-    ODatabaseDocumentTx db = new ODatabaseDocumentTx(url);
-    db.open("admin", "admin");
-
-    ORecordFlat record1 = new ORecordFlat(db);
+    ORecordFlat record1 = new ORecordFlat(database);
     record1.value("This is the first version").save();
 
-    db.registerListener(new ODatabaseListener() {
+    final ODatabaseListener listener = new ODatabaseListener() {
 
       @Override
       public void onAfterTxCommit(ODatabase iDatabase) {
@@ -124,6 +129,16 @@ public class TransactionAtomicTest extends DocumentDBBaseTest {
       }
 
       @Override
+      public void onBeforeCommand(OCommandRequestText iCommand, OCommandExecutor executor) {
+
+      }
+
+      @Override
+      public void onAfterCommand(OCommandRequestText iCommand, OCommandExecutor executor, Object result) {
+
+      }
+
+      @Override
       public void onCreate(ODatabase iDatabase) {
       }
 
@@ -139,12 +154,19 @@ public class TransactionAtomicTest extends DocumentDBBaseTest {
       public boolean onCorruptionRepairDatabase(ODatabase iDatabase, final String iReason, String iWhatWillbeFixed) {
         return true;
       }
-    });
+    };
 
-    db.begin();
-    db.commit();
+    database.registerListener(listener);
+    database.begin();
 
-    db.close();
+    try {
+      database.commit();
+      Assert.assertTrue(false);
+    } catch (OTransactionException e) {
+      Assert.assertTrue(true);
+    } finally {
+      database.unregisterListener(listener);
+    }
   }
 
   @Test
@@ -171,18 +193,17 @@ public class TransactionAtomicTest extends DocumentDBBaseTest {
       ODocument kumquat = new ODocument("Fruit").field("name", "Kumquat").field("color", "Orange");
 
       apple.save();
-      Assert.assertEquals(apple.getIdentity().getClusterId(), fruitClass.getDefaultClusterId());
-
       orange.save();
-      Assert.assertEquals(orange.getIdentity().getClusterId(), fruitClass.getDefaultClusterId());
-
       banana.save();
-      Assert.assertEquals(banana.getIdentity().getClusterId(), fruitClass.getDefaultClusterId());
-
       kumquat.save();
-      Assert.assertEquals(kumquat.getIdentity().getClusterId(), fruitClass.getDefaultClusterId());
 
       database.commit();
+
+      Assert.assertEquals(apple.getIdentity().getClusterId(), fruitClass.getDefaultClusterId());
+      Assert.assertEquals(orange.getIdentity().getClusterId(), fruitClass.getDefaultClusterId());
+      Assert.assertEquals(banana.getIdentity().getClusterId(), fruitClass.getDefaultClusterId());
+      Assert.assertEquals(kumquat.getIdentity().getClusterId(), fruitClass.getDefaultClusterId());
+
       Assert.assertTrue(false);
 
     } catch (OResponseProcessingException e) {

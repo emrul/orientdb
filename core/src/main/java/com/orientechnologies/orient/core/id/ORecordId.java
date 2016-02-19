@@ -19,11 +19,7 @@
  */
 package com.orientechnologies.orient.core.id;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.util.List;
-
+import com.orientechnologies.common.util.OPatternConst;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
@@ -33,6 +29,11 @@ import com.orientechnologies.orient.core.serialization.OBinaryProtocol;
 import com.orientechnologies.orient.core.serialization.OMemoryStream;
 import com.orientechnologies.orient.core.serialization.serializer.OStringSerializerHelper;
 import com.orientechnologies.orient.core.storage.OStorage;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.List;
 
 public class ORecordId implements ORID {
   public static final ORecordId EMPTY_RECORD_ID        = new ORecordId();
@@ -95,6 +96,10 @@ public class ORecordId implements ORID {
 
   public static boolean isTemporary(final long clusterPosition) {
     return clusterPosition < CLUSTER_POS_INVALID;
+  }
+
+  public static boolean isA(final String iString) {
+    return OPatternConst.PATTERN_RID.matcher(iString).matches();
   }
 
   public void reset() {
@@ -169,7 +174,7 @@ public class ORecordId implements ORID {
     if (clusterId == otherClusterId) {
       final long otherClusterPos = iOther.getIdentity().getClusterPosition();
 
-      return Long.compare(clusterPosition, otherClusterPos);
+      return (clusterPosition < otherClusterPos) ? -1 : ((clusterPosition == otherClusterPos) ? 0 : 1);
     } else if (clusterId > otherClusterId)
       return 1;
 
@@ -275,7 +280,17 @@ public class ORecordId implements ORID {
   @Override
   public void lock(final boolean iExclusive) {
     ODatabaseRecordThreadLocal.INSTANCE.get().getTransaction()
-        .lockRecord(this, iExclusive ? OStorage.LOCKING_STRATEGY.KEEP_EXCLUSIVE_LOCK : OStorage.LOCKING_STRATEGY.KEEP_SHARED_LOCK);
+        .lockRecord(this, iExclusive ? OStorage.LOCKING_STRATEGY.EXCLUSIVE_LOCK : OStorage.LOCKING_STRATEGY.SHARED_LOCK);
+  }
+
+  @Override
+  public boolean isLocked() {
+    return ODatabaseRecordThreadLocal.INSTANCE.get().getTransaction().isLockedRecord(this);
+  }
+
+  @Override
+  public OStorage.LOCKING_STRATEGY lockingStrategy() {
+    return ODatabaseRecordThreadLocal.INSTANCE.get().getTransaction().lockingStrategy(this);
   }
 
   @Override

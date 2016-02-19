@@ -1,30 +1,37 @@
 /*
-  *
-  *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-  *  *
-  *  *  Licensed under the Apache License, Version 2.0 (the "License");
-  *  *  you may not use this file except in compliance with the License.
-  *  *  You may obtain a copy of the License at
-  *  *
-  *  *       http://www.apache.org/licenses/LICENSE-2.0
-  *  *
-  *  *  Unless required by applicable law or agreed to in writing, software
-  *  *  distributed under the License is distributed on an "AS IS" BASIS,
-  *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  *  *  See the License for the specific language governing permissions and
-  *  *  limitations under the License.
-  *  *
-  *  * For more information: http://www.orientechnologies.com
-  *
-  */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 
 package com.orientechnologies.common.log;
 
 import com.orientechnologies.common.exception.OException;
+import com.orientechnologies.common.parser.OSystemVariableResolver;
+import com.orientechnologies.orient.core.command.OCommandOutputListener;
+import com.orientechnologies.orient.core.db.ODatabaseDocumentInternal;
+import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
+import com.orientechnologies.orient.core.storage.impl.local.OAbstractPaginatedStorage;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.FileHandler;
 import java.util.logging.Handler;
@@ -32,13 +39,16 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class OLogManager {
-  private static final String      DEFAULT_LOG  = "com.orientechnologies";
-  private static final OLogManager instance     = new OLogManager();
-  private boolean                  debug        = true;
-  private boolean                  info         = true;
-  private boolean                  warn         = true;
-  private boolean                  error        = true;
-  private Level                    minimumLevel = Level.SEVERE;
+  private static final String      DEFAULT_LOG                  = "com.orientechnologies";
+  private static final String      ENV_INSTALL_CUSTOM_FORMATTER = "orientdb.installCustomFormatter";
+  private static final OLogManager instance                     = new OLogManager();
+  private boolean                  debug                        = true;
+  private boolean                  info                         = true;
+  private boolean                  warn                         = true;
+  private boolean                  error                        = true;
+  private Level                    minimumLevel                 = Level.SEVERE;
+
+  private final ConcurrentMap<String, Logger> loggersCache = new ConcurrentHashMap<String, Logger>();
 
   protected OLogManager() {
   }
@@ -48,6 +58,12 @@ public class OLogManager {
   }
 
   public static void installCustomFormatter() {
+    final boolean installCustomFormatter = Boolean
+        .parseBoolean(OSystemVariableResolver.resolveSystemVariables("${" + ENV_INSTALL_CUSTOM_FORMATTER + "}", "true"));
+
+    if (!installCustomFormatter)
+      return;
+
     try {
       // ASSURE TO HAVE THE ORIENT LOG FORMATTER TO THE CONSOLE EVEN IF NO CONFIGURATION FILE IS TAKEN
       final Logger log = Logger.getLogger("");
@@ -78,7 +94,36 @@ public class OLogManager {
   public void log(final Object iRequester, final Level iLevel, String iMessage, final Throwable iException,
       final Object... iAdditionalArgs) {
     if (iMessage != null) {
-      final Logger log = iRequester != null ? Logger.getLogger(iRequester.getClass().getName()) : Logger.getLogger(DEFAULT_LOG);
+      try {
+        final ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.INSTANCE != null
+            ? ODatabaseRecordThreadLocal.INSTANCE.getIfDefined() : null;
+        if (db != null && db.getStorage() != null && db.getStorage() instanceof OAbstractPaginatedStorage) {
+          final String dbName = db.getStorage().getName();
+          if (dbName != null)
+            iMessage = "{db=" + dbName + "} " + iMessage;
+        }
+      } catch (Throwable e) {
+      }
+
+      final String requesterName;
+      if (iRequester != null) {
+        requesterName = iRequester.getClass().getName();
+      } else {
+        requesterName = DEFAULT_LOG;
+      }
+
+      Logger log = loggersCache.get(requesterName);
+      if (log == null) {
+        log = Logger.getLogger(requesterName);
+
+        if (log != null) {
+          Logger oldLogger = loggersCache.putIfAbsent(requesterName, log);
+
+          if (oldLogger != null)
+            log = oldLogger;
+        }
+      }
+
       if (log == null) {
         // USE SYSERR
         try {
@@ -95,7 +140,7 @@ public class OLogManager {
           else
             log.log(iLevel, msg);
         } catch (Exception e) {
-          OLogManager.instance().warn(this, "Error on formatting message '%s'", e, iMessage);
+          System.err.print(String.format("Error on formatting message '%s'. Exception: %s", iMessage, e.toString()));
         }
       }
     }
@@ -299,11 +344,16 @@ public class OLogManager {
     }
 
     Logger log = Logger.getLogger(DEFAULT_LOG);
-    for (Handler h : log.getHandlers()) {
-      if (h.getClass().isAssignableFrom(iHandler)) {
-        h.setLevel(level);
-        break;
+    while (log != null) {
+
+      for (Handler h : log.getHandlers()) {
+        if (h.getClass().isAssignableFrom(iHandler)) {
+          h.setLevel(level);
+          break;
+        }
       }
+
+      log = log.getParent();
     }
 
     return level;
@@ -312,5 +362,14 @@ public class OLogManager {
   public void flush() {
     for (Handler h : Logger.getLogger(Logger.GLOBAL_LOGGER_NAME).getHandlers())
       h.flush();
+  }
+
+  public OCommandOutputListener getCommandOutputListener(final Object iThis, final Level iLevel) {
+    return new OCommandOutputListener() {
+      @Override
+      public void onMessage(String iText) {
+        log(iThis, iLevel, iText, null);
+      }
+    };
   }
 }

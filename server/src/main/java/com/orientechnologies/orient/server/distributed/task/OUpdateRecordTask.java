@@ -19,6 +19,8 @@
  */
 package com.orientechnologies.orient.server.distributed.task;
 
+import com.orientechnologies.orient.core.Orient;
+import com.orientechnologies.orient.core.command.OCommandDistributedReplicateRequest;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.exception.ORecordNotFoundException;
 import com.orientechnologies.orient.core.id.ORecordId;
@@ -27,6 +29,7 @@ import com.orientechnologies.orient.core.record.ORecordInternal;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.version.ORecordVersion;
 import com.orientechnologies.orient.server.OServer;
+import com.orientechnologies.orient.server.distributed.ODistributedDatabase;
 import com.orientechnologies.orient.server.distributed.ODistributedRequest;
 import com.orientechnologies.orient.server.distributed.ODistributedServerLog;
 import com.orientechnologies.orient.server.distributed.ODistributedServerLog.DIRECTION;
@@ -47,19 +50,31 @@ public class OUpdateRecordTask extends OAbstractRecordReplicatedTask {
 
   protected byte[]          previousContent;
   protected ORecordVersion  previousVersion;
-
+  protected byte            recordType;
   protected byte[]          content;
+
+  private transient ORecord record;
+  private transient boolean lockRecord       = true;
 
   public OUpdateRecordTask() {
   }
 
   public OUpdateRecordTask(final ORecordId iRid, final byte[] iPreviousContent, final ORecordVersion iPreviousVersion,
-      final byte[] iContent, final ORecordVersion iVersion) {
+      final byte[] iContent, final ORecordVersion iVersion, final byte iRecordType) {
     super(iRid, iVersion);
     previousContent = iPreviousContent;
     previousVersion = iPreviousVersion;
-
     content = iContent;
+    recordType = iRecordType;
+  }
+
+  @Override
+  public ORecord getRecord() {
+    if (record == null) {
+      record = Orient.instance().getRecordFactoryManager().newInstance(recordType);
+      ORecordInternal.fill(record, rid, version, content, true);
+    }
+    return record;
   }
 
   @Override
@@ -68,44 +83,73 @@ public class OUpdateRecordTask extends OAbstractRecordReplicatedTask {
     ODistributedServerLog.debug(this, iManager.getLocalNodeName(), getNodeSource(), DIRECTION.IN, "updating record %s/%s v.%s",
         database.getName(), rid.toString(), version.toString());
 
-    ORecord loadedRecord = rid.getRecord();
-    if (loadedRecord == null)
-      throw new ORecordNotFoundException("Record " + rid + " was not found on update");
+    final ODistributedDatabase ddb = iManager.getMessageService().getDatabase(database.getName());
+    if (!inTx) {
+      // TRY LOCKING RECORD
+      if (lockRecord && !ddb.lockRecord(rid, nodeSource))
+        throw new ODistributedRecordLockedException(rid);
+    }
 
-    if (loadedRecord instanceof ODocument) {
-      // APPLY CHANGES FIELD BY FIELD TO MARK DIRTY FIELDS FOR INDEXES/HOOKS
-      final ODocument newDocument = new ODocument().fromStream(content);
-      ((ODocument) loadedRecord).merge(newDocument, false, false).getRecordVersion().copyFrom(version);
-    } else
-      ORecordInternal.fill(loadedRecord, rid, version, content, true);
+    try {
+      ORecord loadedRecord = rid.getRecord();
+      if (loadedRecord == null)
+        throw new ORecordNotFoundException("Record " + rid + " was not found on update");
 
-    loadedRecord = database.save(loadedRecord);
+      if (loadedRecord instanceof ODocument) {
+        // APPLY CHANGES FIELD BY FIELD TO MARK DIRTY FIELDS FOR INDEXES/HOOKS
+        final ODocument newDocument = (ODocument) getRecord();
 
-    ODistributedServerLog.debug(this, iManager.getLocalNodeName(), getNodeSource(), DIRECTION.IN, "+-> updated record %s/%s v.%s",
-        database.getName(), rid.toString(), loadedRecord.getRecordVersion().toString());
+        ODocument loadedDocument = (ODocument) loadedRecord;
+        ORecordVersion loadedRecordVersion = loadedDocument.merge(newDocument, false, false).getRecordVersion();
+        if (loadedRecordVersion.getCounter() != version.getCounter()) {
+          loadedDocument.setDirty();
+        }
+        loadedRecordVersion.copyFrom(version);
+      } else
+        ORecordInternal.fill(loadedRecord, rid, version, content, true);
 
-    return loadedRecord.getRecordVersion();
+      loadedRecord = database.save(loadedRecord);
+
+      ODistributedServerLog.debug(this, iManager.getLocalNodeName(), getNodeSource(), DIRECTION.IN,
+          "+-> updated record %s/%s v.%s", database.getName(), rid.toString(), loadedRecord.getRecordVersion().toString());
+
+      // RETURN THE SAME OBJECT (NOT A COPY), SO AFTER COMMIT THE VERSIONS IS UPDATED AND SENT TO THE CALLER
+      return loadedRecord.getRecordVersion();
+
+    } finally {
+      if (!inTx)
+        ddb.unlockRecord(rid);
+    }
   }
 
   @Override
-  public QUORUM_TYPE getQuorumType() {
-    return QUORUM_TYPE.WRITE;
+  public OCommandDistributedReplicateRequest.QUORUM_TYPE getQuorumType() {
+    return OCommandDistributedReplicateRequest.QUORUM_TYPE.WRITE;
   }
 
   @Override
-  public OUpdateRecordTask getFixTask(final ODistributedRequest iRequest, final Object iBadResponse, final Object iGoodResponse) {
+  public OUpdateRecordTask getFixTask(final ODistributedRequest iRequest, OAbstractRemoteTask iOriginalTask,
+      final Object iBadResponse, final Object iGoodResponse) {
     final ORecordVersion versionCopy = version.copy();
     versionCopy.setRollbackMode();
 
-    return new OUpdateRecordTask(rid, null, null, ((OUpdateRecordTask) iRequest.getTask()).content, versionCopy);
+    return new OUpdateRecordTask(rid, null, null, ((OUpdateRecordTask) iOriginalTask).content, versionCopy, recordType);
   }
 
   @Override
   public OAbstractRemoteTask getUndoTask(final ODistributedRequest iRequest, final Object iBadResponse) {
-    if (iBadResponse instanceof Throwable)
-      return null;
+    final ORecordVersion versionCopy = previousVersion.copy();
+    versionCopy.setRollbackMode();
 
-    return new OUpdateRecordTask(rid, null, null, previousContent, previousVersion);
+    return new OUpdateRecordTask(rid, null, null, previousContent, versionCopy, recordType);
+  }
+
+  public boolean isLockRecord() {
+    return lockRecord;
+  }
+
+  public void setLockRecord(final boolean lockRecord) {
+    this.lockRecord = lockRecord;
   }
 
   @Override
@@ -113,6 +157,7 @@ public class OUpdateRecordTask extends OAbstractRecordReplicatedTask {
     super.writeExternal(out);
     out.writeInt(content.length);
     out.write(content);
+    out.write(recordType);
   }
 
   @Override
@@ -121,6 +166,7 @@ public class OUpdateRecordTask extends OAbstractRecordReplicatedTask {
     final int contentSize = in.readInt();
     content = new byte[contentSize];
     in.readFully(content);
+    recordType = in.readByte();
   }
 
   public byte[] getPreviousContent() {

@@ -20,8 +20,14 @@
 
 package com.orientechnologies.orient.graph.sql;
 
+import org.junit.Assert;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
 import com.orientechnologies.common.util.OCallable;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
+import com.orientechnologies.orient.core.metadata.schema.OClass;
+import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.sql.OCommandSQL;
 import com.orientechnologies.orient.graph.GraphTxAbstractTest;
@@ -29,9 +35,6 @@ import com.tinkerpop.blueprints.impls.orient.OrientBaseGraph;
 import com.tinkerpop.blueprints.impls.orient.OrientEdgeType;
 import com.tinkerpop.blueprints.impls.orient.OrientVertex;
 import com.tinkerpop.blueprints.impls.orient.OrientVertexType;
-import org.junit.Assert;
-import org.junit.BeforeClass;
-import org.junit.Test;
 
 public class SQLMoveVertexCommandInTxTest extends GraphTxAbstractTest {
   private static OrientVertexType customer;
@@ -40,16 +43,37 @@ public class SQLMoveVertexCommandInTxTest extends GraphTxAbstractTest {
   private static int              customerGeniusCluster;
 
   @BeforeClass
-  public static void setUp() throws Exception {
+  public static void beforeClass() {
+    init(SQLMoveVertexCommandInTxTest.class.getSimpleName());
+
     graph.executeOutsideTx(new OCallable<Object, OrientBaseGraph>() {
       @Override
       public Object call(OrientBaseGraph iArgument) {
+        customer = graph.getVertexType("Customer");
+        if (customer != null) {
+          graph.command(new OCommandSQL("delete vertex Customer"));
+          graph.dropVertexType("Customer");
+        }
+
         customer = (OrientVertexType) graph.createVertexType("Customer").setClusterSelection("default");
         customer.addCluster("Customer_genius");
         customerGeniusCluster = graph.getRawGraph().getClusterIdByName("Customer_genius");
 
+        provider = graph.getVertexType("Provider");
+        if (provider != null) {
+          graph.command(new OCommandSQL("delete vertex Provider"));
+          graph.dropVertexType("Provider");
+        }
+
         provider = (OrientVertexType) graph.createVertexType("Provider").setClusterSelection("default");
+
+        knows = graph.getEdgeType("Knows");
+        if (knows != null) {
+          graph.command(new OCommandSQL("delete edge Knows"));
+          graph.dropVertexType("Knows");
+        }
         knows = graph.createEdgeType("Knows");
+
         return null;
       }
     });
@@ -220,5 +244,55 @@ public class SQLMoveVertexCommandInTxTest extends GraphTxAbstractTest {
     }
 
     Assert.assertEquals(tot, 2);
+  }
+
+  @Test
+  public void testMoveBatch() {
+    for (int i = 0; i < 100; ++i)
+      new ODocument("Customer").field("testMoveBatch", true).save();
+
+    Iterable<OrientVertex> result = graph.command(
+        new OCommandSQL("MOVE VERTEX (select from Customer where testMoveBatch = true) TO CLASS:Provider BATCH 10")).execute();
+
+    // CHECK RESULT
+    int tot = 0;
+    for (OrientVertex v : result) {
+      tot++;
+      ODocument fromTo = v.getRecord();
+      OIdentifiable from = fromTo.field("old");
+      OIdentifiable to = fromTo.field("new");
+
+      // CHECK FROM
+      Assert.assertEquals(from.getIdentity().getClusterId(), customer.getDefaultClusterId());
+
+      // CHECK DESTINATION
+      Assert.assertEquals(to.getIdentity().getClusterId(), provider.getDefaultClusterId());
+      ODocument newDocument = to.getRecord();
+      Assert.assertEquals(newDocument.getClassName(), "Provider");
+
+      Assert.assertTrue((Boolean) newDocument.field("testMoveBatch"));
+    }
+
+    Assert.assertEquals(tot, 100);
+  }
+
+  @Test
+  public void testMoveWithUniqueIndex() {
+    graph.executeOutsideTx(new OCallable<Object, OrientBaseGraph>() {
+      @Override
+      public Object call(OrientBaseGraph iArgument) {
+        customer.createProperty("id", OType.LONG).createIndex(OClass.INDEX_TYPE.UNIQUE_HASH_INDEX);
+        return null;
+      }
+    });
+
+    for (int i = 0; i < 100; ++i)
+      new ODocument("Customer").field("id", i).save();
+
+    Iterable<OrientVertex> result = graph.command(
+        new OCommandSQL("MOVE VERTEX (select from Customer where id = 0) TO CLUSTER:Customer_genius")).execute();
+
+    Iterable<OrientVertex> result2 = graph.command(
+        new OCommandSQL("MOVE VERTEX (select from Customer where id = 1) TO CLASS:Customer")).execute();
   }
 }

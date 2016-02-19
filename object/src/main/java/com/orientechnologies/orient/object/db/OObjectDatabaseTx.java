@@ -21,12 +21,14 @@ package com.orientechnologies.orient.object.db;
 
 import com.orientechnologies.common.collection.OMultiValue;
 import com.orientechnologies.common.log.OLogManager;
+import com.orientechnologies.common.util.OCommonConst;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
 import com.orientechnologies.orient.core.conflict.ORecordConflictStrategy;
 import com.orientechnologies.orient.core.db.ODatabase;
 import com.orientechnologies.orient.core.db.ODatabaseDocumentInternal;
 import com.orientechnologies.orient.core.db.ODatabaseInternal;
+import com.orientechnologies.orient.core.db.ODatabaseListener;
 import com.orientechnologies.orient.core.db.OUserObject2RecordHandler;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.db.object.ODatabaseObject;
@@ -40,8 +42,10 @@ import com.orientechnologies.orient.core.exception.OSerializationException;
 import com.orientechnologies.orient.core.exception.OTransactionException;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.id.ORecordId;
+import com.orientechnologies.orient.core.metadata.OMetadataInternal;
 import com.orientechnologies.orient.core.metadata.security.ORole;
 import com.orientechnologies.orient.core.metadata.security.ORule;
+import com.orientechnologies.orient.core.metadata.security.OToken;
 import com.orientechnologies.orient.core.metadata.security.OUser;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.impl.ODocument;
@@ -107,7 +111,7 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
   }
 
   public <T> T newInstance(final Class<T> iType) {
-    return (T) newInstance(iType.getSimpleName(), null, new Object[0]);
+    return (T) newInstance(iType.getSimpleName(), null, OCommonConst.EMPTY_OBJECT_ARRAY);
   }
 
   public <T> T newInstance(final Class<T> iType, Object... iArgs) {
@@ -115,7 +119,7 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
   }
 
   public <RET> RET newInstance(String iClassName) {
-    return (RET) newInstance(iClassName, null, new Object[0]);
+    return (RET) newInstance(iClassName, null, OCommonConst.EMPTY_OBJECT_ARRAY);
   }
 
   @Override
@@ -123,7 +127,16 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
     super.open(iUserName, iUserPassword);
     entityManager.registerEntityClass(OUser.class);
     entityManager.registerEntityClass(ORole.class);
-    metadata = new OMetadataObject(underlying.getMetadata());
+    metadata = new OMetadataObject((OMetadataInternal) underlying.getMetadata());
+    return (THISDB) this;
+  }
+
+  @Override
+  public <THISDB extends ODatabase> THISDB open(OToken iToken) {
+    super.open(iToken);
+    entityManager.registerEntityClass(OUser.class);
+    entityManager.registerEntityClass(ORole.class);
+    metadata = new OMetadataObject((OMetadataInternal) underlying.getMetadata());
     return (THISDB) this;
   }
 
@@ -131,8 +144,13 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
   public OMetadataObject getMetadata() {
     checkOpeness();
     if (metadata == null)
-      metadata = new OMetadataObject(underlying.getMetadata());
+      metadata = new OMetadataObject((OMetadataInternal) underlying.getMetadata());
     return metadata;
+  }
+
+  @Override
+  public Iterable<ODatabaseListener> getListeners() {
+    return underlying.getListeners();
   }
 
   /**
@@ -142,9 +160,9 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
    * @see OEntityManager#registerEntityClasses(String)
    */
   public <RET extends Object> RET newInstance(final String iClassName, final Object iEnclosingClass, Object... iArgs) {
-    checkSecurity(ORule.ResourceGeneric.CLASS, ORole.PERMISSION_CREATE, iClassName);
+    underlying.checkIfActive();
 
-    ((ODatabaseDocumentTx) underlying).setCurrentDatabaseInThreadLocal();
+    checkSecurity(ORule.ResourceGeneric.CLASS, ORole.PERMISSION_CREATE, iClassName);
 
     try {
       Class<?> entityClass = entityManager.getEntityClass(iClassName);
@@ -231,16 +249,22 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
   }
 
   public <RET> RET reload(Object iPojo, final String iFetchPlan, final boolean iIgnoreCache) {
+    return reload(iPojo, iFetchPlan, iIgnoreCache, true);
+  }
+
+  @Override
+  public <RET> RET reload(Object iObject, String iFetchPlan, boolean iIgnoreCache, boolean force) {
     checkOpeness();
-    if (iPojo == null)
+    if (iObject == null)
       return null;
 
     // GET THE ASSOCIATED DOCUMENT
-    final ODocument record = getRecordByUserObject(iPojo, true);
-    underlying.reload(record, iFetchPlan, iIgnoreCache);
+    final ODocument record = getRecordByUserObject(iObject, true);
+    underlying.reload(record, iFetchPlan, iIgnoreCache, force);
 
-    iPojo = stream2pojo(record, iPojo, iFetchPlan, true);
-    return (RET) iPojo;
+    iObject = stream2pojo(record, iObject, iFetchPlan, true);
+    return (RET) iObject;
+
   }
 
   public <RET> RET load(final Object iPojo, final String iFetchPlan) {
@@ -308,7 +332,15 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
   }
 
   @Override
+  @Deprecated
   public <RET> RET load(Object iPojo, String iFetchPlan, boolean iIgnoreCache, boolean loadTombstone,
+      OStorage.LOCKING_STRATEGY iLockingStrategy) {
+    return load(iPojo, iFetchPlan, iIgnoreCache, !iIgnoreCache, loadTombstone, iLockingStrategy);
+  }
+
+  @Override
+  @Deprecated
+  public <RET> RET load(Object iPojo, String iFetchPlan, boolean iIgnoreCache, final boolean iUpdateCache, boolean loadTombstone,
       OStorage.LOCKING_STRATEGY iLockingStrategy) {
     checkOpeness();
     if (iPojo == null)
@@ -319,7 +351,7 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
     try {
       record.setInternalStatus(ORecordElement.STATUS.UNMARSHALLING);
 
-      record = underlying.load(record, iFetchPlan, iIgnoreCache, loadTombstone, OStorage.LOCKING_STRATEGY.DEFAULT);
+      record = underlying.load(record, iFetchPlan, iIgnoreCache, iUpdateCache, loadTombstone, OStorage.LOCKING_STRATEGY.DEFAULT);
 
       return (RET) stream2pojo(record, iPojo, iFetchPlan);
     } finally {
@@ -336,18 +368,26 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
   }
 
   public <RET> RET load(final ORID iRecordId, final String iFetchPlan, final boolean iIgnoreCache) {
-    return (RET) load(iRecordId, iFetchPlan, iIgnoreCache, false, OStorage.LOCKING_STRATEGY.DEFAULT);
+    return (RET) load(iRecordId, iFetchPlan, iIgnoreCache, !iIgnoreCache, false, OStorage.LOCKING_STRATEGY.DEFAULT);
   }
 
   @Override
+  @Deprecated
   public <RET> RET load(ORID iRecordId, String iFetchPlan, boolean iIgnoreCache, boolean loadTombstone,
+      OStorage.LOCKING_STRATEGY iLockingStrategy) {
+    return load(iRecordId, iFetchPlan, iIgnoreCache, !iIgnoreCache, loadTombstone, iLockingStrategy);
+  }
+
+  @Override
+  @Deprecated
+  public <RET> RET load(ORID iRecordId, String iFetchPlan, boolean iIgnoreCache, final boolean iUpdateCache, boolean loadTombstone,
       OStorage.LOCKING_STRATEGY iLockingStrategy) {
     checkOpeness();
     if (iRecordId == null)
       return null;
 
     // GET THE ASSOCIATED DOCUMENT
-    final ODocument record = (ODocument) underlying.load(iRecordId, iFetchPlan, iIgnoreCache, loadTombstone,
+    final ODocument record = (ODocument) underlying.load(iRecordId, iFetchPlan, iIgnoreCache, iUpdateCache, loadTombstone,
         OStorage.LOCKING_STRATEGY.DEFAULT);
     if (record == null)
       return null;
@@ -810,7 +850,8 @@ public class OObjectDatabaseTx extends ODatabasePojoAbstract<Object> implements 
     for (ORID orphan : handler.getOrphans()) {
       final ODocument doc = orphan.getRecord();
       deleteCascade(doc);
-      underlying.delete(doc);
+      if (doc != null)
+        underlying.delete(doc);
     }
     handler.getOrphans().clear();
   }

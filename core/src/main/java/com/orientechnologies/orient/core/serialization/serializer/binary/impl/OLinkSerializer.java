@@ -32,11 +32,12 @@ import com.orientechnologies.common.serialization.types.OShortSerializer;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.id.ORecordId;
+import com.orientechnologies.orient.core.storage.impl.local.paginated.wal.OWALChangesTree;
 
 /**
  * Serializer for {@link com.orientechnologies.orient.core.metadata.schema.OType#LINK}
  *
- * @author ibershadskiy <a href="mailto:ibersh20@gmail.com">Ilya Bershadskiy</a>
+ * @author Ilya Bershadskiy (ibersh20-at-gmail.com)
  * @since 07.02.12
  */
 public class OLinkSerializer implements OBinarySerializer<OIdentifiable> {
@@ -113,7 +114,26 @@ public class OLinkSerializer implements OBinarySerializer<OIdentifiable> {
   }
 
   @Override
+  public OIdentifiable deserializeFromDirectMemoryObject(OWALChangesTree.PointerWrapper wrapper, long offset) {
+    final int clusterId = OShortSerializer.INSTANCE.deserializeFromDirectMemory(wrapper, offset);
+
+    // Wrong implementation but needed for binary compatibility
+    final long clusterPosition = OLongSerializer.INSTANCE.deserialize(
+        wrapper.get(offset + OShortSerializer.SHORT_SIZE, OLongSerializer.LONG_SIZE), 0);
+
+    // final long clusterPosition = OLongSerializer.INSTANCE
+    // .deserializeFromDirectMemory(pointer, offset + OShortSerializer.SHORT_SIZE);
+
+    return new ORecordId(clusterId, clusterPosition);
+  }
+
+  @Override
   public int getObjectSizeInDirectMemory(ODirectMemoryPointer pointer, long offset) {
+    return RID_SIZE;
+  }
+
+  @Override
+  public int getObjectSizeInDirectMemory(OWALChangesTree.PointerWrapper wrapper, long offset) {
     return RID_SIZE;
   }
 

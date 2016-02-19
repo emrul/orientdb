@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2012 henryzhao81@gmail.com
+ * Copyright 2010-2012 henryzhao81-at-gmail.com
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,15 +18,21 @@ package com.orientechnologies.orient.core.db.record;
 
 import java.lang.reflect.Method;
 
-import javax.script.*;
+import javax.script.Bindings;
+import javax.script.Invocable;
+import javax.script.ScriptContext;
+import javax.script.ScriptEngine;
+import javax.script.ScriptException;
 
+import com.orientechnologies.common.concur.resource.OPartitionedObjectPool;
 import com.orientechnologies.common.exception.OException;
 import com.orientechnologies.common.log.OLogManager;
+import com.orientechnologies.common.util.OCommonConst;
 import com.orientechnologies.orient.core.Orient;
-import com.orientechnologies.orient.core.command.script.*;
+import com.orientechnologies.orient.core.command.script.OCommandScriptException;
+import com.orientechnologies.orient.core.command.script.OScriptManager;
 import com.orientechnologies.orient.core.db.ODatabase.STATUS;
-import com.orientechnologies.orient.core.db.ODatabaseDocumentInternal;
-import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
+import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.exception.OConfigurationException;
 import com.orientechnologies.orient.core.hook.ODocumentHookAbstract;
@@ -34,9 +40,10 @@ import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.id.ORecordId;
 import com.orientechnologies.orient.core.metadata.function.OFunction;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
-import com.orientechnologies.orient.core.metadata.schema.OClassImpl;
+import com.orientechnologies.orient.core.metadata.schema.OImmutableClass;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.impl.ODocument;
+import com.orientechnologies.orient.core.record.impl.ODocumentInternal;
 import com.orientechnologies.orient.core.serialization.serializer.OStringSerializerHelper;
 
 /**
@@ -68,7 +75,8 @@ public class OClassTrigger extends ODocumentHookAbstract {
   public static final String ONAFTER_DELETE     = "onAfterDelete";
   public static final String PROP_AFTER_DELETE  = ONAFTER_DELETE;
 
-  public OClassTrigger() {
+  public OClassTrigger(ODatabaseDocument database) {
+    super(database);
   }
 
   public DISTRIBUTED_EXECUTION_MODE getDistributedExecutionMode() {
@@ -168,28 +176,30 @@ public class OClassTrigger extends ODocumentHookAbstract {
   }
 
   public RESULT onTrigger(final TYPE iType, final ORecord iRecord) {
-    if (ODatabaseRecordThreadLocal.INSTANCE.isDefined() && ODatabaseRecordThreadLocal.INSTANCE.get().getStatus() != STATUS.OPEN)
+    if (database.getStatus() != STATUS.OPEN)
       return RESULT.RECORD_NOT_CHANGED;
 
     if (!(iRecord instanceof ODocument))
       return RESULT.RECORD_NOT_CHANGED;
 
     final ODocument document = (ODocument) iRecord;
-    if (document.getImmutableSchemaClass() != null && document.getImmutableSchemaClass().isSubClassOf(CLASSNAME))
+    OImmutableClass immutableClass = ODocumentInternal.getImmutableSchemaClass(document);
+    if (immutableClass != null && immutableClass.isSubClassOf(CLASSNAME))
       return super.onTrigger(iType, iRecord);
+
     return RESULT.RECORD_NOT_CHANGED;
   }
 
   private Object checkClzAttribute(final ODocument iDocument, String attr) {
-    final OClass clz = iDocument.getImmutableSchemaClass();
+    final OClass clz = ODocumentInternal.getImmutableSchemaClass(iDocument);
     if (clz != null && clz.isSubClassOf(CLASSNAME)) {
       OFunction func = null;
-      String fieldName = ((OClassImpl) clz).getCustom(attr);
+      String fieldName = clz.getCustom(attr);
       OClass superClz = clz.getSuperClass();
       while (fieldName == null || fieldName.length() == 0) {
         if (superClz == null || superClz.getName().equals(CLASSNAME))
           break;
-        fieldName = ((OClassImpl) superClz).getCustom(attr);
+        fieldName = superClz.getCustom(attr);
         superClz = superClz.getSuperClass();
       }
       if (fieldName != null && fieldName.length() > 0) {
@@ -197,14 +207,13 @@ public class OClassTrigger extends ODocumentHookAbstract {
         final Object[] clzMethod = this.checkMethod(fieldName);
         if (clzMethod != null)
           return clzMethod;
-        func = ODatabaseRecordThreadLocal.INSTANCE.get().getMetadata().getFunctionLibrary().getFunction(fieldName);
+        func = database.getMetadata().getFunctionLibrary().getFunction(fieldName);
         if (func == null) { // check if it is rid
           if (OStringSerializerHelper.contains(fieldName, ORID.SEPARATOR)) {
             try {
-              ODocument funcDoc = ODatabaseRecordThreadLocal.INSTANCE.get().load(new ORecordId(fieldName));
+              ODocument funcDoc = database.load(new ORecordId(fieldName));
               if (funcDoc != null) {
-                func = ODatabaseRecordThreadLocal.INSTANCE.get().getMetadata().getFunctionLibrary()
-                    .getFunction((String) funcDoc.field("name"));
+                func = database.getMetadata().getFunctionLibrary().getFunction((String) funcDoc.field("name"));
               }
             } catch (Exception ex) {
               OLogManager.instance().error(this, "illegal record id : ", ex.getMessage());
@@ -216,7 +225,7 @@ public class OClassTrigger extends ODocumentHookAbstract {
         if (funcProp != null) {
           final String funcName = funcProp instanceof ODocument ? (String) ((ODocument) funcProp).field("name") : funcProp
               .toString();
-          func = ODatabaseRecordThreadLocal.INSTANCE.get().getMetadata().getFunctionLibrary().getFunction(funcName);
+          func = database.getMetadata().getFunctionLibrary().getFunction(funcName);
         }
       }
       return func;
@@ -265,56 +274,52 @@ public class OClassTrigger extends ODocumentHookAbstract {
     if (func == null)
       return RESULT.RECORD_NOT_CHANGED;
 
-    ODatabaseDocumentInternal db = ODatabaseRecordThreadLocal.INSTANCE.getIfDefined();
-    // final OFunction f = db.getMetadata().getFunctionLibrary().getFunction(funcName);
     final OScriptManager scriptManager = Orient.instance().getScriptManager();
-    final ScriptEngine scriptEngine = scriptManager.getEngine(func.getLanguage());
-    // final ScriptEngine scriptEngine = new ScriptEngineManager().getEngineByName("javascript");
-    final Bindings binding = scriptEngine.getBindings(ScriptContext.ENGINE_SCOPE);
-    // final Bindings binding = scriptEngine.createBindings();
 
-    for (OScriptInjection i : scriptManager.getInjections())
-      i.bind(binding);
-    binding.put("doc", iDocument);
-    if (db != null) {
-      binding.put("db", new OScriptDocumentDatabaseWrapper((ODatabaseDocumentTx) db));
-      binding.put("orient", new OScriptOrientWrapper(db));
-    } else
-      binding.put("orient", new OScriptOrientWrapper());
-
-    // scriptEngine.setBindings(binding, ScriptContext.ENGINE_SCOPE);
-
-    String result = null;
+    final OPartitionedObjectPool.PoolEntry<ScriptEngine> entry = scriptManager.acquireDatabaseEngine(database.getName(),
+        func.getLanguage());
+    final ScriptEngine scriptEngine = entry.object;
     try {
-      if (func.getLanguage() == null)
-        throw new OConfigurationException("Database function '" + func.getName() + "' has no language");
-      final String funcStr = scriptManager.getFunctionDefinition(func);
-      if (funcStr != null) {
-        try {
-          scriptEngine.eval(funcStr);
-        } catch (ScriptException e) {
-          scriptManager.getErrorMessage(e, funcStr);
+      final Bindings binding = scriptEngine.getBindings(ScriptContext.ENGINE_SCOPE);
+
+      scriptManager.bind(binding, (ODatabaseDocumentTx) database, null, null);
+      binding.put("doc", iDocument);
+
+      String result = null;
+      try {
+        if (func.getLanguage() == null)
+          throw new OConfigurationException("Database function '" + func.getName() + "' has no language");
+        final String funcStr = scriptManager.getFunctionDefinition(func);
+        if (funcStr != null) {
+          try {
+            scriptEngine.eval(funcStr);
+          } catch (ScriptException e) {
+            scriptManager.throwErrorMessage(e, funcStr);
+          }
         }
+        if (scriptEngine instanceof Invocable) {
+          final Invocable invocableEngine = (Invocable) scriptEngine;
+          Object[] EMPTY = OCommonConst.EMPTY_OBJECT_ARRAY;
+          result = (String) invocableEngine.invokeFunction(func.getName(), EMPTY);
+        }
+      } catch (ScriptException e) {
+        throw new OCommandScriptException("Error on execution of the script", func.getName(), e.getColumnNumber(), e);
+      } catch (NoSuchMethodException e) {
+        throw new OCommandScriptException("Error on execution of the script", func.getName(), 0, e);
+      } catch (OCommandScriptException e) {
+        // PASS THROUGH
+        throw e;
+
+      } finally {
+        scriptManager.unbind(binding, null, null);
       }
-      if (scriptEngine instanceof Invocable) {
-        final Invocable invocableEngine = (Invocable) scriptEngine;
-        Object[] EMPTY = new Object[0];
-        result = (String) invocableEngine.invokeFunction(func.getName(), EMPTY);
+      if (result == null) {
+        return RESULT.RECORD_NOT_CHANGED;
       }
-    } catch (ScriptException e) {
-      throw new OCommandScriptException("Error on execution of the script", func.getName(), e.getColumnNumber(), e);
-    } catch (NoSuchMethodException e) {
-      throw new OCommandScriptException("Error on execution of the script", func.getName(), 0, e);
-    } catch (OCommandScriptException e) {
-      // PASS THROUGH
-      throw e;
+      return RESULT.valueOf(result);
 
     } finally {
-      scriptManager.unbind(binding);
+      scriptManager.releaseDatabaseEngine(func.getLanguage(), database.getName(), entry);
     }
-    if (result == null) {
-      return RESULT.RECORD_NOT_CHANGED;
-    }
-    return RESULT.valueOf(result);// result;
   }
 }

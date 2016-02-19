@@ -19,15 +19,6 @@
  */
 package com.orientechnologies.orient.core.db;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.concurrent.Callable;
-
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.cache.OLocalRecordCache;
 import com.orientechnologies.orient.core.command.OCommandOutputListener;
@@ -37,12 +28,23 @@ import com.orientechnologies.orient.core.db.tool.ODatabaseImport;
 import com.orientechnologies.orient.core.exception.ODatabaseException;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.intent.OIntent;
+import com.orientechnologies.orient.core.metadata.security.OToken;
 import com.orientechnologies.orient.core.storage.ORecordMetadata;
 import com.orientechnologies.orient.core.storage.OStorage;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.concurrent.Callable;
+
 @SuppressWarnings("unchecked")
 public abstract class ODatabaseWrapperAbstract<DB extends ODatabaseInternal, T> implements ODatabaseInternal<T> {
-  protected DB                          underlying;
+  protected DB                   underlying;
   protected ODatabaseInternal<?> databaseOwner;
 
   public ODatabaseWrapperAbstract(final DB iDatabase) {
@@ -54,6 +56,22 @@ public abstract class ODatabaseWrapperAbstract<DB extends ODatabaseInternal, T> 
   public <THISDB extends ODatabase> THISDB open(final String iUserName, final String iUserPassword) {
     underlying.open(iUserName, iUserPassword);
     return (THISDB) this;
+  }
+
+  public <THISDB extends ODatabase> THISDB open(final OToken iToken) {
+    underlying.open(iToken);
+    Orient.instance().getDatabaseFactory().register(databaseOwner);
+    return (THISDB) this;
+  }
+
+  @Override
+  public ODatabase activateOnCurrentThread() {
+    return underlying.activateOnCurrentThread();
+  }
+
+  @Override
+  public boolean isActiveOnCurrentThread() {
+    return underlying.isActiveOnCurrentThread();
   }
 
   public <THISDB extends ODatabase> THISDB create() {
@@ -97,9 +115,9 @@ public abstract class ODatabaseWrapperAbstract<DB extends ODatabaseInternal, T> 
    * @throws IOException
    */
   @Override
-  public void backup(OutputStream out, Map<String, Object> options, Callable<Object> callable,
+  public List<String> backup(OutputStream out, Map<String, Object> options, Callable<Object> callable,
       final OCommandOutputListener iListener, int compressionLevel, int bufferSize) throws IOException {
-    underlying.backup(out, options, callable, iListener, compressionLevel, bufferSize);
+    return underlying.backup(out, options, callable, iListener, compressionLevel, bufferSize);
   }
 
   /**

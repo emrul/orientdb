@@ -15,18 +15,21 @@
  */
 package com.orientechnologies.orient.test.database.auto;
 
-import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.exception.ORecordNotFoundException;
 import com.orientechnologies.orient.core.exception.OSecurityException;
 import com.orientechnologies.orient.core.metadata.security.ORole;
 import com.orientechnologies.orient.core.metadata.security.OSecurityShared;
+import com.orientechnologies.orient.core.metadata.security.OUser;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.sql.OCommandSQL;
 import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery;
 import com.orientechnologies.orient.enterprise.channel.binary.OResponseProcessingException;
 import org.testng.Assert;
-import org.testng.annotations.*;
+import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.Optional;
+import org.testng.annotations.Parameters;
+import org.testng.annotations.Test;
 
 import java.io.IOException;
 import java.util.Collection;
@@ -35,20 +38,26 @@ import java.util.Set;
 
 @Test(groups = "security")
 public class RestrictedTest extends DocumentDBBaseTest {
-  private ODocument           adminRecord;
-  private ODocument           writerRecord;
+  private ODocument adminRecord;
+  private ODocument writerRecord;
 
-	@Parameters(value = "url")
-	public RestrictedTest(@Optional String url) {
-		super(url);
-	}
+  private OUser     readerUser = null;
+  private ORole     readerRole = null;
 
-	@Test
+  @Parameters(value = "url")
+  public RestrictedTest(@Optional String url) {
+    super(url);
+  }
+
+  @Test
   public void testCreateRestrictedClass() {
     database.open("admin", "admin");
     database.getMetadata().getSchema().createClass("CMSDocument", database.getMetadata().getSchema().getClass("ORestricted"));
     adminRecord = new ODocument("CMSDocument").field("user", "admin").save();
     adminRecord.reload();
+
+    readerUser = database.getMetadata().getSecurity().getUser("reader");
+    readerRole = database.getMetadata().getSecurity().getRole("reader");
   }
 
   @Test(dependsOnMethods = "testCreateRestrictedClass")
@@ -110,7 +119,7 @@ public class RestrictedTest extends DocumentDBBaseTest {
     database.close();
 
     database.open("admin", "admin");
-    Assert.assertEquals(((ODocument) adminRecord.reload()).field("user"), "admin");
+    Assert.assertEquals(((ODocument) database.load(adminRecord.getIdentity())).field("user"), "admin");
   }
 
   @Test(dependsOnMethods = "testFilteredDirectUpdateAsWriter")
@@ -155,7 +164,7 @@ public class RestrictedTest extends DocumentDBBaseTest {
   public void testAddReaderAsRole() throws IOException {
     database.open("writer", "writer");
     Set<OIdentifiable> allows = ((ODocument) writerRecord.reload()).field(OSecurityShared.ALLOW_ALL_FIELD);
-    allows.add(database.getMetadata().getSecurity().getRole("reader").getDocument().getIdentity());
+    allows.add(readerRole.getIdentity());
     writerRecord.save();
   }
 
@@ -263,6 +272,38 @@ public class RestrictedTest extends DocumentDBBaseTest {
 
     }
 
+  }
+
+  @Test(dependsOnMethods = "testTruncateUnderlyingCluster")
+  public void testUpdateRestricted() {
+    database.open("admin", "admin");
+    database.getMetadata().getSchema()
+        .createClass("TestUpdateRestricted", database.getMetadata().getSchema().getClass("ORestricted"));
+    adminRecord = new ODocument("TestUpdateRestricted").field("user", "admin").save();
+
+    database.close();
+
+    database.open("writer", "writer");
+    List<ODocument> result = database.query(new OSQLSynchQuery<Object>("select from TestUpdateRestricted"));
+    Assert.assertTrue(result.isEmpty());
+
+    database.close();
+
+    database.open("admin", "admin");
+    database.command(new OCommandSQL("update TestUpdateRestricted content {\"data\":\"My Test\"}")).execute();
+    result = database.query(new OSQLSynchQuery<ODocument>("select from TestUpdateRestricted"));
+
+    Assert.assertEquals(result.size(), 1);
+
+    final ODocument doc = result.get(0);
+    Assert.assertEquals(doc.field("data"), "My Test");
+    doc.field("user", "admin");
+    doc.save();
+    database.close();
+
+    database.open("writer", "writer");
+    result = database.query(new OSQLSynchQuery<Object>("select from TestUpdateRestricted"));
+    Assert.assertTrue(result.isEmpty());
   }
 
   @BeforeMethod

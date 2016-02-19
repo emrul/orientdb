@@ -30,7 +30,9 @@ import com.orientechnologies.orient.core.command.script.OCommandExecutorFunction
 import com.orientechnologies.orient.core.command.script.OCommandFunction;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
+import com.orientechnologies.orient.core.metadata.OMetadataInternal;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
+import com.orientechnologies.orient.core.metadata.schema.OClassImpl;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery;
@@ -59,7 +61,7 @@ public class OFunctionLibraryImpl implements OFunctionLibrary {
 
     // LOAD ALL THE FUNCTIONS IN MEMORY
     final ODatabaseDocument db = ODatabaseRecordThreadLocal.INSTANCE.get();
-    if (db.getMetadata().getImmutableSchemaSnapshot().existsClass("OFunction")) {
+    if (((OMetadataInternal) db.getMetadata()).getImmutableSchemaSnapshot().existsClass("OFunction")) {
       List<ODocument> result = db.query(new OSQLSynchQuery<ODocument>("select from OFunction order by name"));
       for (ODocument d : result) {
         d.reload();
@@ -80,6 +82,7 @@ public class OFunctionLibraryImpl implements OFunctionLibrary {
     init();
 
     final OFunction f = new OFunction().setName(iName);
+    f.save();
     functions.put(iName.toUpperCase(), f);
 
     return f;
@@ -94,11 +97,11 @@ public class OFunctionLibraryImpl implements OFunctionLibrary {
     if (db.getMetadata().getSchema().existsClass("OFunction"))
       return;
 
-    final OClass f = db.getMetadata().getSchema().createClass("OFunction");
-    f.createProperty("name", OType.STRING);
-    f.createProperty("code", OType.STRING);
-    f.createProperty("language", OType.STRING);
-    f.createProperty("idempotent", OType.BOOLEAN);
-    f.createProperty("parameters", OType.EMBEDDEDLIST, OType.STRING);
+    final OClassImpl f = (OClassImpl) db.getMetadata().getSchema().createClass("OFunction");
+    f.createProperty("name", OType.STRING, (OType) null, false);
+    f.createProperty("code", OType.STRING, (OType) null, false);
+    f.createProperty("language", OType.STRING, (OType) null, false);
+    f.createProperty("idempotent", OType.BOOLEAN, (OType) null, false);
+    f.createProperty("parameters", OType.EMBEDDEDLIST, OType.STRING, false);
   }
 }

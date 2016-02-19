@@ -19,9 +19,6 @@
  */
 package com.orientechnologies.orient.core.metadata.schema;
 
-import java.text.ParseException;
-import java.util.*;
-
 import com.orientechnologies.common.comparator.OCaseInsentiveComparator;
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.util.OCollections;
@@ -34,8 +31,11 @@ import com.orientechnologies.orient.core.db.OScenarioThreadLocal;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.db.record.ORecordElement;
 import com.orientechnologies.orient.core.exception.OSchemaException;
-import com.orientechnologies.orient.core.index.*;
-import com.orientechnologies.orient.core.metadata.security.ODatabaseSecurityResources;
+import com.orientechnologies.orient.core.index.OIndex;
+import com.orientechnologies.orient.core.index.OIndexDefinition;
+import com.orientechnologies.orient.core.index.OIndexInternal;
+import com.orientechnologies.orient.core.index.OIndexManager;
+import com.orientechnologies.orient.core.index.OPropertyIndexDefinition;
 import com.orientechnologies.orient.core.metadata.security.ORole;
 import com.orientechnologies.orient.core.metadata.security.ORule;
 import com.orientechnologies.orient.core.record.impl.ODocument;
@@ -43,9 +43,12 @@ import com.orientechnologies.orient.core.sql.OCommandSQL;
 import com.orientechnologies.orient.core.sql.OSQLEngine;
 import com.orientechnologies.orient.core.storage.OAutoshardedStorage;
 import com.orientechnologies.orient.core.storage.OStorage;
-import com.orientechnologies.orient.core.storage.OStorageEmbedded;
 import com.orientechnologies.orient.core.storage.OStorageProxy;
+import com.orientechnologies.orient.core.storage.impl.local.OAbstractPaginatedStorage;
 import com.orientechnologies.orient.core.type.ODocumentWrapperNoClass;
+
+import java.text.ParseException;
+import java.util.*;
 
 /**
  * Contains the description of a persistent class property.
@@ -54,24 +57,27 @@ import com.orientechnologies.orient.core.type.ODocumentWrapperNoClass;
  * 
  */
 public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty {
-  private final OClassImpl    owner;
+  private final OClassImpl owner;
 
   // private String name;
   // private OType type;
 
-  private OType               linkedType;
-  private OClass              linkedClass;
-  transient private String    linkedClassName;
+  private OType            linkedType;
+  private OClass           linkedClass;
+  transient private String linkedClassName;
 
   private boolean             mandatory;
   private boolean             notNull = false;
   private String              min;
   private String              max;
+  private String              defaultValue;
   private String              regexp;
   private boolean             readonly;
   private Map<String, String> customFields;
   private OCollate            collate = new ODefaultCollate();
   private OGlobalProperty     globalRef;
+
+  private volatile int hashCode;
 
   @Deprecated
   OPropertyImpl(final OClassImpl owner, final String name, final OType type) {
@@ -81,7 +87,7 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
   }
 
   OPropertyImpl(final OClassImpl owner) {
-    document = new ODocument();
+    document = new ODocument().setTrackingChanges(false);
     this.owner = owner;
   }
 
@@ -216,8 +222,8 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
           if (definition instanceof OPropertyIndexDefinition) {
             relatedIndexes.add(index);
           } else {
-            throw new IllegalArgumentException("This operation applicable only for property indexes. " + index.getName() + " is "
-                + index.getDefinition());
+            throw new IllegalArgumentException(
+                "This operation applicable only for property indexes. " + index.getName() + " is " + index.getDefinition());
           }
         }
       }
@@ -339,6 +345,8 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
   public OPropertyImpl setLinkedClass(final OClass linkedClass) {
     getDatabase().checkSecurity(ORule.ResourceGeneric.SCHEMA, ORole.PERMISSION_UPDATE);
 
+    checkSupportLinkedClass(getType());
+
     acquireSchemaWriteLock();
     try {
       final ODatabaseDocumentInternal database = getDatabase();
@@ -372,17 +380,18 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
     try {
       checkEmbedded();
 
-      OType type = globalRef.getType();
-      if (type == OType.LINK || type == OType.LINKSET || type == OType.LINKLIST || type == OType.LINKMAP || type == OType.EMBEDDED
-          || type == OType.EMBEDDEDSET || type == OType.EMBEDDEDLIST || type == OType.EMBEDDEDMAP)
-        this.linkedClass = iLinkedClass;
-      else
-        throw new OSchemaException("Linked class is not supported for type: " + type);
+      this.linkedClass = iLinkedClass;
 
     } finally {
       releaseSchemaWriteLock();
     }
 
+  }
+
+  protected static void checkSupportLinkedClass(OType type) {
+    if (type != OType.LINK && type != OType.LINKSET && type != OType.LINKLIST && type != OType.LINKMAP && type != OType.EMBEDDED
+        && type != OType.EMBEDDEDSET && type != OType.EMBEDDEDLIST && type != OType.EMBEDDEDMAP)
+      throw new OSchemaException("Linked class is not supported for type: " + type);
   }
 
   public OType getLinkedType() {
@@ -396,6 +405,8 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
 
   public OProperty setLinkedType(final OType linkedType) {
     getDatabase().checkSecurity(ORule.ResourceGeneric.SCHEMA, ORole.PERMISSION_UPDATE);
+
+    checkLinkTypeSupport(getType());
 
     acquireSchemaWriteLock();
     try {
@@ -428,16 +439,17 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
     acquireSchemaWriteLock();
     try {
       checkEmbedded();
-      OType type = globalRef.getType();
-      if (type == OType.EMBEDDEDSET || type == OType.EMBEDDEDLIST || type == OType.EMBEDDEDMAP)
-        this.linkedType = iLinkedType;
-      else
-        throw new OSchemaException("Linked type is not supported for type: " + type);
+      this.linkedType = iLinkedType;
 
     } finally {
       releaseSchemaWriteLock();
     }
 
+  }
+
+  protected static void checkLinkTypeSupport(OType type) {
+    if (type != OType.EMBEDDEDSET && type != OType.EMBEDDEDLIST && type != OType.EMBEDDEDMAP)
+      throw new OSchemaException("Linked type is not supported for type: " + type);
   }
 
   public boolean isNotNull() {
@@ -628,6 +640,45 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
     return this;
   }
 
+  public String getDefaultValue() {
+    acquireSchemaReadLock();
+    try {
+      return defaultValue;
+    } finally {
+      releaseSchemaReadLock();
+    }
+  }
+
+  public OPropertyImpl setDefaultValue(final String defaultValue) {
+    getDatabase().checkSecurity(ORule.ResourceGeneric.SCHEMA, ORole.PERMISSION_UPDATE);
+
+    acquireSchemaWriteLock();
+    try {
+      final ODatabaseDocumentInternal database = getDatabase();
+      final OStorage storage = database.getStorage();
+
+      if (storage instanceof OStorageProxy) {
+        final String cmd = String.format("alter property %s default %s", getFullName(), defaultValue);
+        database.command(new OCommandSQL(cmd)).execute();
+      } else if (isDistributedCommand()) {
+        final String cmd = String.format("alter property %s default %s", getFullName(), defaultValue);
+        final OCommandSQL commandSQL = new OCommandSQL(cmd);
+
+        commandSQL.addExcludedNode(((OAutoshardedStorage) storage).getNodeId());
+
+        database.command(commandSQL).execute();
+
+        setDefaultValueInternal(defaultValue);
+      } else {
+        setDefaultValueInternal(defaultValue);
+      }
+    } finally {
+      releaseSchemaWriteLock();
+    }
+
+    return this;
+  }
+
   public String getRegexp() {
     acquireSchemaReadLock();
     try {
@@ -653,7 +704,7 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
         final OCommandSQL commandSQL = new OCommandSQL(cmd);
         commandSQL.addExcludedNode(((OAutoshardedStorage) storage).getNodeId());
 
-        database.command(new OCommandSQL(cmd)).execute();
+        database.command(commandSQL).execute();
 
         setRegexpInternal(regexp);
       } else
@@ -776,6 +827,8 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
       return isReadonly();
     case MAX:
       return getMax();
+    case DEFAULT:
+      return getDefaultValue();
     case NAME:
       return getName();
     case NOTNULL:
@@ -815,6 +868,9 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
       break;
     case MAX:
       setMax(stringValue);
+      break;
+    case DEFAULT:
+      setDefaultValue(stringValue);
       break;
     case NAME:
       setName(stringValue);
@@ -907,15 +963,28 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
 
   @Override
   public int hashCode() {
+    int sh = hashCode;
+    if (sh != 0)
+      return sh;
+
     acquireSchemaReadLock();
     try {
-      final int prime = 31;
-      int result = super.hashCode();
-      result = prime * result + ((owner == null) ? 0 : owner.hashCode());
-      return result;
+      sh = hashCode;
+      if (sh != 0)
+        return sh;
+
+      calculateHashCode();
+      return hashCode;
     } finally {
       releaseSchemaReadLock();
     }
+  }
+
+  private void calculateHashCode() {
+    final int prime = 31;
+    int result = super.hashCode();
+    result = prime * result + ((owner == null) ? 0 : owner.hashCode());
+    hashCode = result;
   }
 
   @Override
@@ -924,9 +993,7 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
     try {
       if (this == obj)
         return true;
-      if (!super.equals(obj))
-        return false;
-      if (!OProperty.class.isAssignableFrom(obj.getClass()))
+      if (obj == null || !OProperty.class.isAssignableFrom(obj.getClass()))
         return false;
       OProperty other = (OProperty) obj;
       if (owner == null) {
@@ -934,7 +1001,7 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
           return false;
       } else if (!owner.equals(other.getOwnerClass()))
         return false;
-      return true;
+      return this.getName().equals(other.getName());
     } finally {
       releaseSchemaReadLock();
     }
@@ -960,6 +1027,7 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
     mandatory = document.containsField("mandatory") ? (Boolean) document.field("mandatory") : false;
     readonly = document.containsField("readonly") ? (Boolean) document.field("readonly") : false;
     notNull = document.containsField("notNull") ? (Boolean) document.field("notNull") : false;
+    defaultValue = (String) (document.containsField("defaultValue") ? document.field("defaultValue") : null);
     if (document.containsField("collate"))
       collate = OSQLEngine.getCollate((String) document.field("collate"));
 
@@ -968,8 +1036,8 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
     regexp = (String) (document.containsField("regexp") ? document.field("regexp") : null);
     linkedClassName = (String) (document.containsField("linkedClass") ? document.field("linkedClass") : null);
     linkedType = document.field("linkedType") != null ? OType.getById(((Integer) document.field("linkedType")).byteValue()) : null;
-    customFields = (Map<String, String>) (document.containsField("customFields") ? document
-        .field("customFields", OType.EMBEDDEDMAP) : null);
+    customFields = (Map<String, String>) (document.containsField("customFields") ? document.field("customFields", OType.EMBEDDEDMAP)
+        : null);
   }
 
   public Collection<OIndex<?>> getAllIndexes() {
@@ -1001,6 +1069,7 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
       document.field("mandatory", mandatory);
       document.field("readonly", readonly);
       document.field("notNull", notNull);
+      document.field("defaultValue", defaultValue);
 
       document.field("min", min);
       document.field("max", max);
@@ -1033,11 +1102,12 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
   }
 
   public void releaseSchemaWriteLock() {
+    calculateHashCode();
     owner.releaseSchemaWriteLock();
   }
 
   public void checkEmbedded() {
-    if (!(getDatabase().getStorage().getUnderlying() instanceof OStorageEmbedded))
+    if (!(getDatabase().getStorage().getUnderlying() instanceof OAbstractPaginatedStorage))
       throw new OSchemaException("'Internal' schema modification methods can be used only inside of embedded database");
   }
 
@@ -1054,7 +1124,6 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
       checkEmbedded();
 
       owner.renameProperty(oldName, name);
-      // this.name = name;
       this.globalRef = owner.owner.findOrCreateGlobalProperty(name, this.globalRef.getType());
     } finally {
       releaseSchemaWriteLock();
@@ -1108,6 +1177,19 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
 
       checkForDateFormat(min);
       this.min = min;
+    } finally {
+      releaseSchemaWriteLock();
+    }
+  }
+
+  private void setDefaultValueInternal(final String defaultValue) {
+    getDatabase().checkSecurity(ORule.ResourceGeneric.SCHEMA, ORole.PERMISSION_UPDATE);
+
+    acquireSchemaWriteLock();
+    try {
+      checkEmbedded();
+
+      this.defaultValue = defaultValue;
     } finally {
       releaseSchemaWriteLock();
     }
@@ -1220,8 +1302,8 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
           final OIndexManager indexManager = database.getMetadata().getIndexManager();
 
           for (OIndex<?> indexToRecreate : indexesToRecreate) {
-            final OIndexInternal.IndexMetadata indexMetadata = indexToRecreate.getInternal().loadMetadata(
-                indexToRecreate.getConfiguration());
+            final OIndexInternal.IndexMetadata indexMetadata = indexToRecreate.getInternal()
+                .loadMetadata(indexToRecreate.getConfiguration());
 
             final ODocument metadata = indexToRecreate.getMetadata();
             final List<String> fields = indexMetadata.getIndexDefinition().getFields();
@@ -1258,7 +1340,7 @@ public class OPropertyImpl extends ODocumentWrapperNoClass implements OProperty 
 
   private boolean isDistributedCommand() {
     return getDatabase().getStorage() instanceof OAutoshardedStorage
-        && OScenarioThreadLocal.INSTANCE.get() != OScenarioThreadLocal.RUN_MODE.RUNNING_DISTRIBUTED;
+        && OScenarioThreadLocal.INSTANCE.getRunMode() != OScenarioThreadLocal.RUN_MODE.RUNNING_DISTRIBUTED;
   }
 
   @Override

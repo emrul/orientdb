@@ -1,26 +1,27 @@
 /*
-  *
-  *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-  *  *
-  *  *  Licensed under the Apache License, Version 2.0 (the "License");
-  *  *  you may not use this file except in compliance with the License.
-  *  *  You may obtain a copy of the License at
-  *  *
-  *  *       http://www.apache.org/licenses/LICENSE-2.0
-  *  *
-  *  *  Unless required by applicable law or agreed to in writing, software
-  *  *  distributed under the License is distributed on an "AS IS" BASIS,
-  *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  *  *  See the License for the specific language governing permissions and
-  *  *  limitations under the License.
-  *  *
-  *  * For more information: http://www.orientechnologies.com
-  *
-  */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 package com.orientechnologies.orient.core.index;
 
 import com.orientechnologies.common.comparator.ODefaultComparator;
 import com.orientechnologies.common.listener.OProgressListener;
+import com.orientechnologies.orient.core.db.ODatabase;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.serialization.serializer.stream.OStreamSerializer;
@@ -42,9 +43,9 @@ import java.util.Set;
  * 
  */
 public abstract class OIndexOneValue extends OIndexAbstract<OIdentifiable> {
-  public OIndexOneValue(final String type, String algorithm, OIndexEngine<OIdentifiable> engine, String valueContainerAlgorithm,
-      ODocument metadata) {
-    super(type, algorithm, engine, valueContainerAlgorithm, metadata);
+  public OIndexOneValue(String name, final String type, String algorithm, OIndexEngine<OIdentifiable> engine,
+      String valueContainerAlgorithm, ODocument metadata) {
+    super(name, type, algorithm, engine, valueContainerAlgorithm, metadata);
   }
 
   public OIdentifiable get(Object iKey) {
@@ -52,12 +53,22 @@ public abstract class OIndexOneValue extends OIndexAbstract<OIdentifiable> {
 
     iKey = getCollatingValue(iKey);
 
-    acquireSharedLock();
+    final ODatabase database = getDatabase();
+    final boolean txIsActive = database.getTransaction().isActive();
+    if (!txIsActive)
+      keyLockManager.acquireSharedLock(iKey);
     try {
-      return indexEngine.get(iKey);
+      acquireSharedLock();
+      try {
+        return indexEngine.get(iKey);
+      } finally {
+        releaseSharedLock();
+      }
     } finally {
-      releaseSharedLock();
+      if (!txIsActive)
+        keyLockManager.releaseSharedLock(iKey);
     }
+
   }
 
   public long count(Object iKey) {
@@ -65,11 +76,21 @@ public abstract class OIndexOneValue extends OIndexAbstract<OIdentifiable> {
 
     iKey = getCollatingValue(iKey);
 
-    acquireSharedLock();
+    final ODatabase database = getDatabase();
+    final boolean txIsActive = database.getTransaction().isActive();
+    if (!txIsActive)
+      keyLockManager.acquireSharedLock(iKey);
+
     try {
-      return indexEngine.contains(iKey) ? 1 : 0;
+      acquireSharedLock();
+      try {
+        return indexEngine.contains(iKey) ? 1 : 0;
+      } finally {
+        releaseSharedLock();
+      }
     } finally {
-      releaseSharedLock();
+      if (!txIsActive)
+        keyLockManager.releaseSharedLock(iKey);
     }
   }
 
@@ -79,22 +100,32 @@ public abstract class OIndexOneValue extends OIndexAbstract<OIdentifiable> {
 
     key = getCollatingValue(key);
 
-    // CHECK IF ALREADY EXIST
-    final OIdentifiable indexedRID = get(key);
-    if (indexedRID != null && !indexedRID.getIdentity().equals(record.getIdentity())) {
-      final Boolean mergeSameKey = metadata != null && (Boolean) metadata.field(OIndex.MERGE_KEYS);
-      if (mergeSameKey != null && mergeSameKey)
-        return (ODocument) indexedRID.getRecord();
-      else
-        throw new OIndexException("Cannot index record : " + record + " found duplicated key '" + key + "' in index " + getName()
-            + " previously assigned to the record " + indexedRID);
+    final ODatabase database = getDatabase();
+    final boolean txIsActive = database.getTransaction().isActive();
+
+    if (!txIsActive)
+      keyLockManager.acquireSharedLock(key);
+    try {
+      // CHECK IF ALREADY EXIST
+      final OIdentifiable indexedRID = get(key);
+      if (indexedRID != null && !indexedRID.getIdentity().equals(record.getIdentity())) {
+        final Boolean mergeSameKey = metadata != null && (Boolean) metadata.field(OIndex.MERGE_KEYS);
+        if (mergeSameKey != null && mergeSameKey)
+          return (ODocument) indexedRID.getRecord();
+        else
+          throw new OIndexException("Cannot index record : " + record + " found duplicated key '" + key + "' in index " + getName()
+              + " previously assigned to the record " + indexedRID);
+      }
+      return null;
+    } finally {
+      if (!txIsActive)
+        keyLockManager.releaseSharedLock(key);
     }
-    return null;
   }
 
   public OIndexOneValue create(final String name, final OIndexDefinition indexDefinition, final String clusterIndexName,
       final Set<String> clustersToIndex, boolean rebuild, final OProgressListener progressListener) {
-    return (OIndexOneValue) super.create(name, indexDefinition, clusterIndexName, clustersToIndex, rebuild, progressListener,
+    return (OIndexOneValue) super.create(indexDefinition, clusterIndexName, clustersToIndex, rebuild, progressListener,
         determineValueSerializer());
   }
 
@@ -202,22 +233,22 @@ public abstract class OIndexOneValue extends OIndexAbstract<OIdentifiable> {
   public long getSize() {
     checkForRebuild();
 
-    acquireExclusiveLock();
+    acquireSharedLock();
     try {
       return indexEngine.size(null);
     } finally {
-      releaseExclusiveLock();
+      releaseSharedLock();
     }
   }
 
   public long getKeySize() {
     checkForRebuild();
 
-    acquireExclusiveLock();
+    acquireSharedLock();
     try {
       return indexEngine.size(null);
     } finally {
-      releaseExclusiveLock();
+      releaseSharedLock();
     }
   }
 

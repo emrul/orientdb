@@ -1,21 +1,5 @@
 package com.orientechnologies.orient.test.database.auto;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import org.testng.Assert;
-import org.testng.annotations.AfterMethod;
-import org.testng.annotations.BeforeClass;
-import org.testng.annotations.Optional;
-import org.testng.annotations.Parameters;
-import org.testng.annotations.Test;
-
 import com.orientechnologies.orient.core.index.OCompositeKey;
 import com.orientechnologies.orient.core.index.OIndex;
 import com.orientechnologies.orient.core.index.OIndexDefinition;
@@ -27,20 +11,48 @@ import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.sql.OCommandSQL;
 import com.orientechnologies.orient.core.storage.ORecordDuplicatedException;
 import com.orientechnologies.orient.enterprise.channel.binary.OResponseProcessingException;
+import org.testng.Assert;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Optional;
+import org.testng.annotations.Parameters;
+import org.testng.annotations.Test;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 @Test(groups = { "index" })
-public class ClassIndexManagerTest  extends DocumentDBBaseTest {
+public class ClassIndexManagerTest extends DocumentDBBaseTest {
 
-	@Parameters(value = "url")
-	public ClassIndexManagerTest(@Optional String url) {
-		super(url);
-	}
+  @Parameters(value = "url")
+  public ClassIndexManagerTest(@Optional String url) {
+    super(url);
+  }
 
-	@BeforeClass
+  @BeforeClass
   public void beforeClass() throws Exception {
-		super.beforeClass();
+    super.beforeClass();
 
     final OSchema schema = database.getMetadata().getSchema();
+
+    if (schema.existsClass("classIndexManagerTestClass"))
+      schema.dropClass("classIndexManagerTestClass");
+
+    if (schema.existsClass("classIndexManagerTestClassTwo"))
+      schema.dropClass("classIndexManagerTestClassTwo");
+
+    if (schema.existsClass("classIndexManagerTestSuperClass"))
+      schema.dropClass("classIndexManagerTestSuperClass");
+
+    if (schema.existsClass("classIndexManagerTestCompositeCollectionClass"))
+      schema.dropClass("classIndexManagerTestCompositeCollectionClass");
+
     final OClass superClass = schema.createClass("classIndexManagerTestSuperClass");
     final OProperty propertyZero = superClass.createProperty("prop0", OType.STRING);
     propertyZero.createIndex(OClass.INDEX_TYPE.UNIQUE);
@@ -79,18 +91,21 @@ public class ClassIndexManagerTest  extends DocumentDBBaseTest {
 
     oClass.createIndex("classIndexManagerTestIndexOnPropertiesFromClassAndSuperclass", OClass.INDEX_TYPE.UNIQUE, "prop0", "prop1");
 
-    schema.save();
+    schema.reload();
 
     database.close();
   }
 
   @AfterMethod
   public void afterMethod() throws Exception {
-		database.command(new OCommandSQL("delete from classIndexManagerTestClass")).execute();
-		database.command(new OCommandSQL("delete from classIndexManagerTestClassTwo")).execute();
-		database.command(new OCommandSQL("delete from classIndexManagerTestSuperClass")).execute();
+    database.command(new OCommandSQL("delete from classIndexManagerTestClass")).execute();
+    database.command(new OCommandSQL("delete from classIndexManagerTestClassTwo")).execute();
+    database.command(new OCommandSQL("delete from classIndexManagerTestSuperClass")).execute();
 
-		super.afterMethod();
+    Assert.assertEquals(database.getMetadata().getIndexManager().getIndex("classIndexManagerTestClass.prop1").getSize(), 0);
+    Assert.assertEquals(database.getMetadata().getIndexManager().getIndex("classIndexManagerTestClass.prop2").getSize(), 0);
+
+    super.afterMethod();
   }
 
   public void testPropertiesCheckUniqueIndexDubKeysCreate() {

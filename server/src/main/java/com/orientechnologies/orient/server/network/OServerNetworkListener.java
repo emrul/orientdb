@@ -26,7 +26,6 @@ import com.orientechnologies.orient.core.config.OGlobalConfiguration;
 import com.orientechnologies.orient.core.serialization.serializer.OStringSerializerHelper;
 import com.orientechnologies.orient.enterprise.channel.OChannel;
 import com.orientechnologies.orient.enterprise.channel.binary.ONetworkProtocolException;
-import com.orientechnologies.orient.server.OClientConnectionManager;
 import com.orientechnologies.orient.server.OServer;
 import com.orientechnologies.orient.server.ShutdownHelper;
 import com.orientechnologies.orient.server.config.OServerCommandConfiguration;
@@ -193,9 +192,12 @@ public class OServerNetworkListener extends Thread {
           if (server.getDistributedManager() != null) {
             final ODistributedServerManager.NODE_STATUS nodeStatus = server.getDistributedManager().getNodeStatus();
             if (nodeStatus != ODistributedServerManager.NODE_STATUS.ONLINE) {
-              OLogManager.instance().warn(this,
-                  "Distributed server is not yet ONLINE (status=%s), reject incoming connection from %s", nodeStatus,
-                  socket.getRemoteSocketAddress());
+              OLogManager
+                  .instance()
+                  .warn(
+                      this,
+                      "Distributed server is not yet ONLINE (status=%s), reject incoming connection from %s. If you are trying to shutdown the server, please kill the process",
+                      nodeStatus, socket.getRemoteSocketAddress());
               socket.close();
 
               // PAUSE CURRENT THREAD TO SLOW DOWN ANY POSSIBLE ATTACK
@@ -204,17 +206,23 @@ public class OServerNetworkListener extends Thread {
             }
           }
 
-          final int conns = OClientConnectionManager.instance().getTotal();
-          if (conns >= OGlobalConfiguration.NETWORK_MAX_CONCURRENT_SESSIONS.getValueAsInteger()) {
-            // MAXIMUM OF CONNECTIONS EXCEEDED
-            OLogManager.instance().warn(this,
-                "Reached maximum number of concurrent connections (%d), reject incoming connection from %s", conns,
-                socket.getRemoteSocketAddress());
-            socket.close();
+          final int max = OGlobalConfiguration.NETWORK_MAX_CONCURRENT_SESSIONS.getValueAsInteger();
 
-            // PAUSE CURRENT THREAD TO SLOW DOWN ANY POSSIBLE ATTACK
-            Thread.sleep(100);
-            continue;
+          int conns = server.getClientConnectionManager().getTotal();
+          if (conns >= max) {
+            server.getClientConnectionManager().cleanExpiredConnections();
+            conns = server.getClientConnectionManager().getTotal();
+            if (conns >= max) {
+              // MAXIMUM OF CONNECTIONS EXCEEDED
+              OLogManager.instance().warn(this,
+                  "Reached maximum number of concurrent connections (max=%d, current=%d), reject incoming connection from %s", max,
+                  conns, socket.getRemoteSocketAddress());
+              socket.close();
+
+              // PAUSE CURRENT THREAD TO SLOW DOWN ANY POSSIBLE ATTACK
+              Thread.sleep(100);
+              continue;
+            }
           }
 
           socket.setPerformancePreferences(0, 2, 1);

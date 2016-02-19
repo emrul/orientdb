@@ -15,18 +15,6 @@
  */
 package com.orientechnologies.orient.test.database.auto;
 
-import java.io.File;
-import java.io.IOException;
-import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.List;
-
-import org.testng.Assert;
-import org.testng.annotations.BeforeClass;
-import org.testng.annotations.Optional;
-import org.testng.annotations.Parameters;
-import org.testng.annotations.Test;
-
 import com.orientechnologies.orient.client.db.ODatabaseHelper;
 import com.orientechnologies.orient.client.remote.OEngineRemote;
 import com.orientechnologies.orient.core.command.OCommandOutputListener;
@@ -56,6 +44,17 @@ import com.orientechnologies.orient.test.domain.inheritance.InheritanceTestBaseC
 import com.orientechnologies.orient.test.domain.inheritance.InheritanceTestClass;
 import com.orientechnologies.orient.test.domain.schemageneration.JavaTestSchemaGeneration;
 import com.orientechnologies.orient.test.domain.schemageneration.TestSchemaGenerationChild;
+import org.testng.Assert;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Optional;
+import org.testng.annotations.Parameters;
+import org.testng.annotations.Test;
+
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
 
 @Test(groups = { "crud", "object", "schemafull", "inheritanceSchemaFull" })
 public class CRUDObjectInheritanceTestSchemaFull extends ObjectDBBaseTest {
@@ -67,20 +66,20 @@ public class CRUDObjectInheritanceTestSchemaFull extends ObjectDBBaseTest {
   protected long             startRecordNumber;
   private City               redmond        = new City(new Country("Washington"), "Redmond");
 
-	@Parameters(value = "url")
-	public CRUDObjectInheritanceTestSchemaFull(@Optional String url) {
-		super(url);
-	}
+  @Parameters(value = "url")
+  public CRUDObjectInheritanceTestSchemaFull(@Optional String url) {
+    super(url);
+  }
 
-	@BeforeClass
+  @BeforeClass
   public void beforeClass() throws Exception {
-		super.beforeClass();
+    super.beforeClass();
 
-		database.close();
+    database.close();
 
     database = new OObjectDatabaseTx(url + "_objectschema");
     ODatabaseHelper.createDatabase(database, url + "_objectschema", getStorageType());
-    database.close();
+
     try {
       ODatabaseDocumentTx exportDatabase = new ODatabaseDocumentTx(url);
       exportDatabase.open("admin", "admin");
@@ -96,7 +95,11 @@ public class CRUDObjectInheritanceTestSchemaFull extends ObjectDBBaseTest {
       export.close();
       exportDatabase.close();
       ODatabaseDocumentTx importDatabase = new ODatabaseDocumentTx(url + "_objectschema");
-      importDatabase.open("admin", "admin");
+      if (url.startsWith("remote")) {
+        importDatabase.open("root", "D2AFD02F20640EC8B7A5140F34FCA49D2289DB1F0D0598BB9DE8AAA75A0792F3");
+      } else {
+        importDatabase.open("admin", "admin");
+      }
       ODatabaseImport impor = new ODatabaseImport(importDatabase, EXPORT_DIR, listener);
 
       // UNREGISTER ALL THE HOOKS
@@ -130,6 +133,7 @@ public class CRUDObjectInheritanceTestSchemaFull extends ObjectDBBaseTest {
 
   @Test
   public void create() {
+		database.getMetadata().getSchema().reload();
     database.getMetadata().getSchema().synchronizeSchema();
     database.setAutomaticSchemaGeneration(true);
     database.getEntityManager().registerEntityClasses("com.orientechnologies.orient.test.domain.business");

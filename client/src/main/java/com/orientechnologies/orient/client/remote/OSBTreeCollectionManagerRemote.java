@@ -29,6 +29,9 @@ import java.util.UUID;
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.common.serialization.types.OBinarySerializer;
 import com.orientechnologies.common.serialization.types.OIntegerSerializer;
+import com.orientechnologies.orient.core.OOrientShutdownListener;
+import com.orientechnologies.orient.core.OOrientStartupListener;
+import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.db.record.ridbag.ORidBag;
@@ -41,28 +44,41 @@ import com.orientechnologies.orient.enterprise.channel.binary.OChannelBinaryAsyn
 import com.orientechnologies.orient.enterprise.channel.binary.OChannelBinaryProtocol;
 
 /**
- * @author <a href="mailto:enisher@gmail.com">Artem Orobets</a>
+ * @author Artem Orobets (enisher-at-gmail.com)
  */
-public class OSBTreeCollectionManagerRemote extends OSBTreeCollectionManagerAbstract {
+public class OSBTreeCollectionManagerRemote extends OSBTreeCollectionManagerAbstract implements OOrientStartupListener,
+    OOrientShutdownListener {
 
-  private final OCollectionNetworkSerializer             networkSerializer;
-  private boolean                                        remoteCreationAllowed = false;
+  private final OCollectionNetworkSerializer                      networkSerializer;
+  private boolean                                                 remoteCreationAllowed = false;
 
-  private ThreadLocal<Map<UUID, WeakReference<ORidBag>>> pendingCollections    = new ThreadLocal<Map<UUID, WeakReference<ORidBag>>>() {
-                                                                                 @Override
-                                                                                 protected Map<UUID, WeakReference<ORidBag>> initialValue() {
-                                                                                   return new HashMap<UUID, WeakReference<ORidBag>>();
-                                                                                 }
-                                                                               };
+  private volatile ThreadLocal<Map<UUID, WeakReference<ORidBag>>> pendingCollections    = new PendingCollectionsThreadLocal();
 
   public OSBTreeCollectionManagerRemote() {
     super();
     networkSerializer = new OCollectionNetworkSerializer();
+
+    Orient.instance().registerWeakOrientStartupListener(this);
+    Orient.instance().registerWeakOrientShutdownListener(this);
   }
 
   public OSBTreeCollectionManagerRemote(OCollectionNetworkSerializer networkSerializer) {
     super();
     this.networkSerializer = networkSerializer;
+
+    Orient.instance().registerWeakOrientStartupListener(this);
+    Orient.instance().registerWeakOrientShutdownListener(this);
+  }
+
+  @Override
+  public void onShutdown() {
+    pendingCollections = null;
+  }
+
+  @Override
+  public void onStartup() {
+    if (pendingCollections == null)
+      pendingCollections = new PendingCollectionsThreadLocal();
   }
 
   @Override
@@ -70,29 +86,26 @@ public class OSBTreeCollectionManagerRemote extends OSBTreeCollectionManagerAbst
     if (remoteCreationAllowed) {
       OStorageRemote storage = (OStorageRemote) ODatabaseRecordThreadLocal.INSTANCE.get().getStorage().getUnderlying();
       OChannelBinaryAsynchClient client = null;
-      try {
-        client = storage.beginRequest(OChannelBinaryProtocol.REQUEST_CREATE_SBTREE_BONSAI);
-        client.writeInt(clusterId);
-        storage.endRequest(client);
-        OBonsaiCollectionPointer pointer;
+      while (true) {
         try {
-          storage.beginResponse(client);
-          pointer = networkSerializer.readCollectionPointer(client);
-        } finally {
-          storage.endResponse(client);
+          client = storage.beginRequest(OChannelBinaryProtocol.REQUEST_CREATE_SBTREE_BONSAI);
+          client.writeInt(clusterId);
+          storage.endRequest(client);
+          OBonsaiCollectionPointer pointer;
+          try {
+            storage.beginResponse(client);
+            pointer = networkSerializer.readCollectionPointer(client);
+          } finally {
+            storage.endResponse(client);
+          }
+
+          OBinarySerializer<OIdentifiable> keySerializer = OLinkSerializer.INSTANCE;
+          OBinarySerializer<Integer> valueSerializer = OIntegerSerializer.INSTANCE;
+
+          return new OSBTreeBonsaiRemote<OIdentifiable, Integer>(pointer, keySerializer, valueSerializer);
+        } catch (Exception e2) {
+          storage.handleException(client, "Can't create sb-tree bonsai.", e2);
         }
-
-        OBinarySerializer<OIdentifiable> keySerializer = OLinkSerializer.INSTANCE;
-        OBinarySerializer<Integer> valueSerializer = OIntegerSerializer.INSTANCE;
-
-        return new OSBTreeBonsaiRemote<OIdentifiable, Integer>(pointer, keySerializer, valueSerializer);
-      } catch (IOException e) {
-        storage.getEngine().getConnectionManager().remove(client);
-        throw new ODatabaseException("Can't create sb-tree bonsai.", e);
-      } catch (RuntimeException e2) {
-        if (client != null)
-          storage.getEngine().getConnectionManager().release(client);
-        throw e2;
       }
     } else {
       throw new UnsupportedOperationException("Creation of SB-Tree from remote storage is not allowed");
@@ -146,5 +159,12 @@ public class OSBTreeCollectionManagerRemote extends OSBTreeCollectionManagerAbst
   @Override
   public void clearChangedIds() {
     throw new UnsupportedOperationException();
+  }
+
+  private static class PendingCollectionsThreadLocal extends ThreadLocal<Map<UUID, WeakReference<ORidBag>>> {
+    @Override
+    protected Map<UUID, WeakReference<ORidBag>> initialValue() {
+      return new HashMap<UUID, WeakReference<ORidBag>>();
+    }
   }
 }

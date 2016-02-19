@@ -19,7 +19,9 @@
  */
 package com.orientechnologies.orient.core.metadata.security;
 
+import com.orientechnologies.orient.core.db.ODatabaseDocumentInternal;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
+import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 
 import java.util.List;
@@ -32,6 +34,8 @@ import java.util.Set;
  * 
  */
 public class OSecurityNull implements OSecurity {
+  public OSecurityNull(final OSecurity iDelegate, final ODatabaseDocumentInternal iDatabase) {
+  }
 
   @Override
   public boolean isAllowed(final Set<OIdentifiable> iAllowAll, final Set<OIdentifiable> iAllowOperation) {
@@ -46,6 +50,10 @@ public class OSecurityNull implements OSecurity {
   }
 
   public OUser getUser(String iUserName) {
+    return null;
+  }
+
+  public OUser getUser(ORID iUserId) {
     return null;
   }
 
@@ -82,6 +90,10 @@ public class OSecurityNull implements OSecurity {
   }
 
   public OUser authenticate(String iUsername, String iUserPassword) {
+    return null;
+  }
+
+  public OUser authenticate(OToken authToken) {
     return null;
   }
 

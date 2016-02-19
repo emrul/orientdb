@@ -1,22 +1,22 @@
 /*
-  *
-  *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-  *  *
-  *  *  Licensed under the Apache License, Version 2.0 (the "License");
-  *  *  you may not use this file except in compliance with the License.
-  *  *  You may obtain a copy of the License at
-  *  *
-  *  *       http://www.apache.org/licenses/LICENSE-2.0
-  *  *
-  *  *  Unless required by applicable law or agreed to in writing, software
-  *  *  distributed under the License is distributed on an "AS IS" BASIS,
-  *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  *  *  See the License for the specific language governing permissions and
-  *  *  limitations under the License.
-  *  *
-  *  * For more information: http://www.orientechnologies.com
-  *
-  */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 package com.orientechnologies.orient.core.serialization.serializer.record.string;
 
 import java.io.Serializable;
@@ -25,9 +25,10 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
-import com.orientechnologies.common.profiler.OProfilerMBean;
+import com.orientechnologies.common.profiler.OProfiler;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.core.db.OUserObject2RecordHandler;
@@ -48,7 +49,7 @@ import com.orientechnologies.orient.core.util.ODateHelper;
 
 @SuppressWarnings("serial")
 public abstract class ORecordSerializerStringAbstract implements ORecordSerializer, Serializable {
-  protected static final OProfilerMBean PROFILER              = Orient.instance().getProfiler();
+  protected static final OProfiler PROFILER              = Orient.instance().getProfiler();
   private static final char             DECIMAL_SEPARATOR     = '.';
   private static final String           MAX_INTEGER_AS_STRING = String.valueOf(Integer.MAX_VALUE);
   private static final int              MAX_INTEGER_DIGITS    = MAX_INTEGER_AS_STRING.length();
@@ -258,8 +259,6 @@ public abstract class ORecordSerializerStringAbstract implements ORecordSerializ
       return OType.BINARY;
     else if (firstChar == OStringSerializerHelper.EMBEDDED_BEGIN)
       return OType.EMBEDDED;
-    else if (firstChar == OStringSerializerHelper.LINK)
-      return OType.LINK;
     else if (firstChar == OStringSerializerHelper.LIST_BEGIN)
       return OType.EMBEDDEDLIST;
     else if (firstChar == OStringSerializerHelper.SET_BEGIN)
@@ -324,8 +323,11 @@ public abstract class ORecordSerializerStringAbstract implements ORecordSerializ
 
     // CHECK IF THE DECIMAL NUMBER IS A FLOAT OR DOUBLE
     final double dou = Double.parseDouble(iValue);
-    if (dou <= Float.MAX_VALUE || dou >= Float.MIN_VALUE)
+    if ((dou <= Float.MAX_VALUE || dou >= Float.MIN_VALUE) && new Double(new Double(dou).floatValue()).doubleValue() == dou) {
       return OType.FLOAT;
+    } else if (!new Double(dou).toString().equals(iValue)) {
+      return OType.DECIMAL;
+    }
 
     return OType.DOUBLE;
   }
@@ -366,10 +368,16 @@ public abstract class ORecordSerializerStringAbstract implements ORecordSerializ
       return OType.LINKBAG;
     else if (iCharType == 'z')
       return OType.LINKLIST;
+    else if (iCharType == 'm')
+      return OType.LINKMAP;
     else if (iCharType == 'x')
       return OType.LINK;
     else if (iCharType == 'n')
       return OType.LINKSET;
+    else if (iCharType == 'x')
+      return OType.LINK;
+    else if (iCharType == 'u')
+      return OType.CUSTOM;
 
     return OType.STRING;
   }
@@ -426,12 +434,15 @@ public abstract class ORecordSerializerStringAbstract implements ORecordSerializ
     boolean integer = true;
     char c;
 
+    boolean stringStarBySign = false;
+
     for (int index = 0; index < iValue.length(); ++index) {
       c = iValue.charAt(index);
-      if (c < '0' || c > '9')
-        if ((index == 0 && (c == '+' || c == '-')))
+      if (c < '0' || c > '9') {
+        if ((index == 0 && (c == '+' || c == '-'))) {
+          stringStarBySign = true;
           continue;
-        else if (c == DECIMAL_SEPARATOR)
+        } else if (c == DECIMAL_SEPARATOR)
           integer = false;
         else {
           if (index > 0) {
@@ -462,7 +473,12 @@ public abstract class ORecordSerializerStringAbstract implements ORecordSerializ
           }
           return iValue;
         }
+      } else if (stringStarBySign) {
+        stringStarBySign = false;
+      }
     }
+    if (stringStarBySign)
+      return iValue;
 
     if (integer) {
       try {
@@ -683,6 +699,6 @@ public abstract class ORecordSerializerStringAbstract implements ORecordSerializ
   }
 
   protected abstract StringBuilder toString(final ORecord iRecord, final StringBuilder iOutput, final String iFormat,
-      final OUserObject2RecordHandler iObjHandler, final Set<ODocument> iMarshalledRecords, boolean iOnlyDelta,
+      final OUserObject2RecordHandler iObjHandler, final Map<ODocument, Boolean> iMarshalledRecords, boolean iOnlyDelta,
       boolean autoDetectCollectionType);
 }

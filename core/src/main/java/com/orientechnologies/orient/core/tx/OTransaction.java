@@ -19,20 +19,22 @@
  */
 package com.orientechnologies.orient.core.tx;
 
-import java.util.HashMap;
-import java.util.List;
-
 import com.orientechnologies.orient.core.db.ODatabase.OPERATION_MODE;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.db.record.ORecordOperation;
+import com.orientechnologies.orient.core.exception.ORecordNotFoundException;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.index.OIndex;
+import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.storage.ORecordCallback;
 import com.orientechnologies.orient.core.storage.OStorage;
 import com.orientechnologies.orient.core.version.ORecordVersion;
+
+import java.util.HashMap;
+import java.util.List;
 
 public interface OTransaction {
   public enum TXTYPE {
@@ -43,6 +45,10 @@ public interface OTransaction {
     INVALID, BEGUN, COMMITTING, ROLLBACKING, COMPLETED, ROLLED_BACK
   }
 
+  public enum ISOLATION_LEVEL {
+    READ_COMMITTED, REPEATABLE_READ
+  }
+
   public void begin();
 
   public void commit();
@@ -51,55 +57,84 @@ public interface OTransaction {
 
   public void rollback();
 
+  /**
+   * Returns the current isolation level.
+   */
+  public ISOLATION_LEVEL getIsolationLevel();
+
+  /**
+   * Changes the isolation level. Default is READ_COMMITTED. When REPEATABLE_READ is set, any record read from the storage is cached
+   * in memory to guarantee the repeatable reads. This affects the used RAM and speed (because JVM Garbage Collector job).
+   * 
+   * @param iIsolationLevel
+   *          Isolation level to set
+   * @return Current object to allow call in chain
+   */
+  public OTransaction setIsolationLevel(ISOLATION_LEVEL iIsolationLevel);
+
   public void rollback(boolean force, int commitLevelDiff);
 
   public ODatabaseDocument getDatabase();
 
   public void clearRecordEntries();
 
-  public ORecord loadRecord(ORID iRid, ORecord iRecord, String iFetchPlan, boolean ignoreCache, boolean loadTombstone,
+  @Deprecated
+  ORecord loadRecord(ORID iRid, ORecord iRecord, String iFetchPlan, boolean ignoreCache, boolean loadTombstone,
       final OStorage.LOCKING_STRATEGY iLockingStrategy);
 
-  public ORecord saveRecord(ORecord iRecord, String iClusterName, OPERATION_MODE iMode, boolean iForceCreate,
+  @Deprecated
+  ORecord loadRecord(ORID iRid, ORecord iRecord, String iFetchPlan, boolean ignoreCache, boolean iUpdateCache, boolean loadTombstone,
+                      final OStorage.LOCKING_STRATEGY iLockingStrategy);
+
+  ORecord loadRecord(ORID iRid, ORecord iRecord, String iFetchPlan, boolean ignoreCache);
+
+  ORecord reloadRecord(ORID iRid, ORecord iRecord, String iFetchPlan, boolean ignoreCache);
+
+  ORecord reloadRecord(ORID iRid, ORecord iRecord, String iFetchPlan, boolean ignoreCache, boolean force);
+
+  ORecord loadRecordIfVersionIsNotLatest(ORID rid, ORecordVersion recordVersion, String fetchPlan, boolean ignoreCache)
+      throws ORecordNotFoundException;
+
+  ORecord saveRecord(ORecord iRecord, String iClusterName, OPERATION_MODE iMode, boolean iForceCreate,
       ORecordCallback<? extends Number> iRecordCreatedCallback, ORecordCallback<ORecordVersion> iRecordUpdatedCallback);
 
-  public void deleteRecord(ORecord iRecord, OPERATION_MODE iMode);
+  void deleteRecord(ORecord iRecord, OPERATION_MODE iMode);
 
-  public int getId();
+  int getId();
 
-  public TXSTATUS getStatus();
+  TXSTATUS getStatus();
 
-  public Iterable<? extends ORecordOperation> getCurrentRecordEntries();
+  Iterable<? extends ORecordOperation> getCurrentRecordEntries();
 
-  public Iterable<? extends ORecordOperation> getAllRecordEntries();
+  Iterable<? extends ORecordOperation> getAllRecordEntries();
 
-  public List<ORecordOperation> getRecordEntriesByClass(String iClassName);
+  List<ORecordOperation> getNewRecordEntriesByClass(OClass iClass, boolean iPolymorphic);
 
-  public List<ORecordOperation> getNewRecordEntriesByClusterIds(int[] iIds);
+  List<ORecordOperation> getNewRecordEntriesByClusterIds(int[] iIds);
 
-  public ORecord getRecord(ORID iRid);
+  ORecord getRecord(ORID iRid);
 
-  public ORecordOperation getRecordEntry(ORID rid);
+  ORecordOperation getRecordEntry(ORID rid);
 
-  public List<String> getInvolvedIndexes();
+  List<String> getInvolvedIndexes();
 
-  public ODocument getIndexChanges();
+  ODocument getIndexChanges();
 
-  public void addIndexEntry(OIndex<?> delegate, final String iIndexName, final OTransactionIndexChanges.OPERATION iStatus,
+  void addIndexEntry(OIndex<?> delegate, final String iIndexName, final OTransactionIndexChanges.OPERATION iStatus,
       final Object iKey, final OIdentifiable iValue);
 
-  public void clearIndexEntries();
+  void clearIndexEntries();
 
-  public OTransactionIndexChanges getIndexChanges(String iName);
+  OTransactionIndexChanges getIndexChanges(String iName);
 
   /**
    * Tells if the transaction is active.
    * 
    * @return
    */
-  public boolean isActive();
+  boolean isActive();
 
-  public boolean isUsingLog();
+  boolean isUsingLog();
 
   /**
    * If you set this flag to false, you are unable to
@@ -110,9 +145,9 @@ public interface OTransaction {
    * 
    * So you practically unable to work in multithreaded environment and keep data consistent.
    */
-  public void setUsingLog(boolean useLog);
+  void setUsingLog(boolean useLog);
 
-  public void close();
+  void close();
 
   /**
    * When commit in transaction is performed all new records will change their identity, but index values will contain stale links,
@@ -123,17 +158,26 @@ public interface OTransaction {
    * @param newRid
    *          Record identity after commit.
    */
-  public void updateIdentityAfterCommit(final ORID oldRid, final ORID newRid);
+  void updateIdentityAfterCommit(final ORID oldRid, final ORID newRid);
 
-  public int amountOfNestedTxs();
+  int amountOfNestedTxs();
 
-  public OTransaction lockRecord(OIdentifiable iRecord, OStorage.LOCKING_STRATEGY iLockingStrategy);
+  boolean isLockedRecord(OIdentifiable iRecord);
 
-  public OTransaction unlockRecord(OIdentifiable iRecord);
+  OStorage.LOCKING_STRATEGY lockingStrategy(OIdentifiable iRecord);
 
-  public HashMap<ORID, OStorage.LOCKING_STRATEGY> getLockedRecords();
+  OTransaction lockRecord(OIdentifiable iRecord, OStorage.LOCKING_STRATEGY iLockingStrategy);
 
-  public int getEntryCount();
+  OTransaction unlockRecord(OIdentifiable iRecord);
 
-  public boolean hasRecordCreation();
+  HashMap<ORID, OStorage.LOCKING_STRATEGY> getLockedRecords();
+
+  int getEntryCount();
+
+  boolean hasRecordCreation();
+
+  /**
+   * Restores a partially committed transaction to the tial
+   */
+  void restore();
 }

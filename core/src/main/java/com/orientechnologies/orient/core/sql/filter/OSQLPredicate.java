@@ -1,30 +1,30 @@
 /*
-  *
-  *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-  *  *
-  *  *  Licensed under the Apache License, Version 2.0 (the "License");
-  *  *  you may not use this file except in compliance with the License.
-  *  *  You may obtain a copy of the License at
-  *  *
-  *  *       http://www.apache.org/licenses/LICENSE-2.0
-  *  *
-  *  *  Unless required by applicable law or agreed to in writing, software
-  *  *  distributed under the License is distributed on an "AS IS" BASIS,
-  *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  *  *  See the License for the specific language governing permissions and
-  *  *  limitations under the License.
-  *  *
-  *  * For more information: http://www.orientechnologies.com
-  *
-  */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 package com.orientechnologies.orient.core.sql.filter;
 
 import com.orientechnologies.common.parser.OBaseParser;
 import com.orientechnologies.orient.core.command.OCommandContext;
 import com.orientechnologies.orient.core.command.OCommandPredicate;
+import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.exception.OQueryParsingException;
 import com.orientechnologies.orient.core.metadata.schema.OProperty;
-import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.serialization.serializer.OStringSerializerHelper;
 import com.orientechnologies.orient.core.sql.OCommandExecutorSQLSelect;
@@ -35,13 +35,7 @@ import com.orientechnologies.orient.core.sql.operator.OQueryOperator;
 import com.orientechnologies.orient.core.sql.operator.OQueryOperatorNot;
 import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Parses text in SQL format and build a tree of conditions.
@@ -72,13 +66,27 @@ public class OSQLPredicate extends OBaseParser implements OCommandPredicate {
     throw new OCommandSQLParsingException(iText + ". Use " + syntax, parserText, parserGetPreviousPosition());
   }
 
+  protected String upperCase(String text) {
+    // TODO remove and refactor (see same method in OCommandExecutorAbstract)
+    StringBuilder result = new StringBuilder(text.length());
+    for (char c : text.toCharArray()) {
+      String upper = ("" + c).toUpperCase(Locale.ENGLISH);
+      if (upper.length() > 1) {
+        result.append(c);
+      } else {
+        result.append(upper);
+      }
+    }
+    return result.toString();
+  }
+
   public OSQLPredicate text(final String iText) {
     if (iText == null)
       throw new OCommandSQLParsingException("Query text is null");
 
     try {
       parserText = iText;
-      parserTextUpperCase = parserText.toUpperCase(Locale.ENGLISH);
+      parserTextUpperCase = upperCase(parserText);
       parserSetCurrentPosition(0);
       parserSkipWhiteSpaces();
 
@@ -105,7 +113,7 @@ public class OSQLPredicate extends OBaseParser implements OCommandPredicate {
     return evaluate(null, null, iContext);
   }
 
-  public Object evaluate(final ORecord iRecord, ODocument iCurrentResult, final OCommandContext iContext) {
+  public Object evaluate(final OIdentifiable iRecord, ODocument iCurrentResult, final OCommandContext iContext) {
     if (rootCondition == null)
       return true;
 
@@ -242,7 +250,7 @@ public class OSQLPredicate extends OBaseParser implements OCommandPredicate {
         // CONFIGURE COULD INSTANTIATE A NEW OBJECT: ACT AS A FACTORY
         return op.configure(params);
       } catch (Exception e) {
-        throw new OQueryParsingException("Syntax error using the operator '" + op.toString() + "'. Syntax is: " + op.getSyntax());
+        throw new OQueryParsingException("Syntax error using the operator '" + op.toString() + "'. Syntax is: " + op.getSyntax(), e);
       }
     } else
       parserMoveCurrentPosition(+1);
@@ -259,12 +267,15 @@ public class OSQLPredicate extends OBaseParser implements OCommandPredicate {
       if (word.length() == 0)
         break;
 
+      word = word.replaceAll("\\\\", "\\\\\\\\");
+
       final String uWord = word.toUpperCase();
 
       final int lastPosition = parserIsEnded() ? parserText.length() : parserGetCurrentPosition();
 
       if (word.length() > 0 && word.charAt(0) == OStringSerializerHelper.EMBEDDED_BEGIN) {
         braces++;
+
 
         // SUB-CONDITION
         parserSetCurrentPosition(lastPosition - word.length() + 1);
@@ -275,13 +286,13 @@ public class OSQLPredicate extends OBaseParser implements OCommandPredicate {
           braces--;
           parserMoveCurrentPosition(+1);
         }
-        if(subCondition instanceof OSQLFilterCondition){
+        if (subCondition instanceof OSQLFilterCondition) {
           ((OSQLFilterCondition) subCondition).inBraces = true;
         }
         result[i] = subCondition;
       } else if (word.charAt(0) == OStringSerializerHelper.LIST_BEGIN) {
         // COLLECTION OF ELEMENTS
-        parserSetCurrentPosition(lastPosition - word.length());
+        parserSetCurrentPosition(lastPosition - getLastWordLength());
 
         final List<String> stringItems = new ArrayList<String>();
         parserSetCurrentPosition(OStringSerializerHelper.getCollection(parserText, parserGetCurrentPosition(), stringItems));
@@ -328,6 +339,7 @@ public class OSQLPredicate extends OBaseParser implements OCommandPredicate {
             break;
         }
 
+        word = word.replaceAll("\\\\\\\\", "\\\\");
         result[i] = OSQLHelper.parseValue(this, this, word, context);
       }
     }
@@ -361,17 +373,12 @@ public class OSQLPredicate extends OBaseParser implements OCommandPredicate {
     if (parameterItems == null || iArgs == null || iArgs.size() == 0)
       return;
 
-    for (Entry<Object, Object> entry : iArgs.entrySet()) {
-      if (entry.getKey() instanceof Integer)
-        parameterItems.get(((Integer) entry.getKey())).setValue(entry.setValue(entry.getValue()));
-      else {
-        String paramName = entry.getKey().toString();
-        for (OSQLFilterItemParameter value : parameterItems) {
-          if (value.getName().equalsIgnoreCase(paramName)) {
-            value.setValue(entry.getValue());
-            break;
-          }
-        }
+    for (int i = 0; i < parameterItems.size(); i++) {
+      OSQLFilterItemParameter value = parameterItems.get(i);
+      if ("?".equals(value.getName())) {
+        value.setValue(iArgs.get(i));
+      } else {
+        value.setValue(iArgs.get(value.getName()));
       }
     }
   }

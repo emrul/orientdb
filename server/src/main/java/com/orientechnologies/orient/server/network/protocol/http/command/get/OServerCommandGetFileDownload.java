@@ -18,12 +18,14 @@ package com.orientechnologies.orient.server.network.protocol.http.command.get;
 import java.io.IOException;
 import java.util.Date;
 
+import com.orientechnologies.common.util.OPatternConst;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.id.ORecordId;
 import com.orientechnologies.orient.core.metadata.schema.OProperty;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.ORecordAbstract;
 import com.orientechnologies.orient.core.record.impl.ODocument;
+import com.orientechnologies.orient.core.record.impl.ODocumentInternal;
 import com.orientechnologies.orient.core.record.impl.ORecordBytes;
 import com.orientechnologies.orient.server.network.protocol.http.OHttpRequest;
 import com.orientechnologies.orient.server.network.protocol.http.OHttpResponse;
@@ -63,7 +65,7 @@ public class OServerCommandGetFileDownload extends OServerCommandAuthenticatedDb
           sendORecordBinaryFileContent(iRequest, iResponse, OHttpUtils.STATUS_OK_CODE, OHttpUtils.STATUS_OK_DESCRIPTION, fileType,
               (ORecordBytes) response, fileName);
         } else if (response instanceof ODocument) {
-          for (OProperty prop : ((ODocument) response).getImmutableSchemaClass().properties()) {
+          for (OProperty prop : ODocumentInternal.getImmutableSchemaClass(((ODocument) response)).properties()) {
             if (prop.getType().equals(OType.BINARY))
               sendBinaryFieldFileContent(iRequest, iResponse, OHttpUtils.STATUS_OK_CODE, OHttpUtils.STATUS_OK_DESCRIPTION,
                   fileType, (byte[]) ((ODocument) response).field(prop.getName()), fileName);
@@ -121,8 +123,8 @@ public class OServerCommandGetFileDownload extends OServerCommandAuthenticatedDb
   }
 
   private String encodeResponseText(String iText) {
-    iText = new String(iText.replaceAll(" ", "%20"));
-    iText = new String(iText.replaceAll("&", "%26"));
+    iText = OPatternConst.PATTERN_SINGLE_SPACE.matcher(iText).replaceAll("%20");
+    iText = OPatternConst.PATTERN_AMP.matcher(iText).replaceAll("%26");
     return iText;
   }
 

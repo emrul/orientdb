@@ -31,6 +31,7 @@ import com.orientechnologies.orient.core.id.ORecordId;
 import com.orientechnologies.orient.core.metadata.security.OUser;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.record.impl.ORecordBytes;
+import com.orientechnologies.orient.core.sql.OCommandSQLParsingException;
 import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery;
 import com.orientechnologies.orient.core.tx.OTransaction.TXTYPE;
 import com.orientechnologies.orient.core.type.tree.OMVRBTreeRIDSet;
@@ -129,7 +130,7 @@ public class CRUDObjectPhysicalTest extends ObjectDBBaseTest {
 
     database.getEntityManager().registerEntityClass(DummyForTestFreeze.class);
 
-    database.countClass(Dummy.class.getSimpleName());
+    database.countClass(DummyForTestFreeze.class.getSimpleName());
 
     database.getMetadata().getSchema().dropClass(DummyForTestFreeze.class.getSimpleName());
 
@@ -2296,7 +2297,7 @@ public class CRUDObjectPhysicalTest extends ObjectDBBaseTest {
       Assert.fail();
     } catch (OResponseProcessingException e) {
       Assert.assertTrue(e.getCause() instanceof OQueryParsingException);
-    } catch (OQueryParsingException e) {
+    } catch (OCommandSQLParsingException e) {
       Assert.assertTrue(true);
     }
   }
@@ -2445,6 +2446,7 @@ public class CRUDObjectPhysicalTest extends ObjectDBBaseTest {
     Assert.assertEquals(cresult.size(), 0);
   }
 
+  @Test(enabled = false, dependsOnMethods = "testCreate")
   public void testEmbeddedBinary() {
     database.getMetadata().getSchema().reload();
 

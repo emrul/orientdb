@@ -1,29 +1,31 @@
 /*
-  *
-  *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-  *  *
-  *  *  Licensed under the Apache License, Version 2.0 (the "License");
-  *  *  you may not use this file except in compliance with the License.
-  *  *  You may obtain a copy of the License at
-  *  *
-  *  *       http://www.apache.org/licenses/LICENSE-2.0
-  *  *
-  *  *  Unless required by applicable law or agreed to in writing, software
-  *  *  distributed under the License is distributed on an "AS IS" BASIS,
-  *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  *  *  See the License for the specific language governing permissions and
-  *  *  limitations under the License.
-  *  *
-  *  * For more information: http://www.orientechnologies.com
-  *
-  */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 package com.orientechnologies.orient.core.hook;
 
 import com.orientechnologies.orient.core.db.ODatabase.STATUS;
+import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.impl.ODocument;
+import com.orientechnologies.orient.core.record.impl.ODocumentInternal;
 
 /**
  * Hook abstract class that calls separate methods for ODocument records.
@@ -32,10 +34,17 @@ import com.orientechnologies.orient.core.record.impl.ODocument;
  * @see ORecordHook
  */
 public abstract class ODocumentHookAbstract implements ORecordHook {
-  private String[] includeClasses;
-  private String[] excludeClasses;
+  private String[]            includeClasses;
+  private String[]            excludeClasses;
 
-  protected ODocumentHookAbstract() {
+  protected ODatabaseDocument database;
+
+  public ODocumentHookAbstract() {
+    this.database = ODatabaseRecordThreadLocal.INSTANCE.get();
+  }
+
+  public ODocumentHookAbstract(ODatabaseDocument database) {
+    this.database = database;
   }
 
   @Override
@@ -194,8 +203,14 @@ public abstract class ODocumentHookAbstract implements ORecordHook {
   public void onRecordDeleteReplicated(final ODocument iDocument) {
   }
 
+  public void onRecordFinalizeUpdate(final ODocument document) {
+  }
+
+  public void onRecordFinalizeCreation(final ODocument document) {
+  }
+
   public RESULT onTrigger(final TYPE iType, final ORecord iRecord) {
-    if (ODatabaseRecordThreadLocal.INSTANCE.isDefined() && ODatabaseRecordThreadLocal.INSTANCE.get().getStatus() != STATUS.OPEN)
+    if (database.getStatus() != STATUS.OPEN)
       return RESULT.RECORD_NOT_CHANGED;
 
     if (!(iRecord instanceof ODocument))
@@ -267,6 +282,14 @@ public abstract class ODocumentHookAbstract implements ORecordHook {
       onRecordDeleteReplicated(document);
       break;
 
+    case FINALIZE_CREATION:
+      onRecordFinalizeCreation(document);
+      break;
+
+    case FINALIZE_UPDATE:
+      onRecordFinalizeUpdate(document);
+      break;
+
     default:
       throw new IllegalStateException("Hook method " + iType + " is not managed");
     }
@@ -300,7 +323,7 @@ public abstract class ODocumentHookAbstract implements ORecordHook {
     if (includeClasses == null && excludeClasses == null)
       return true;
 
-    final OClass clazz = iDocument.getImmutableSchemaClass();
+    final OClass clazz = ODocumentInternal.getImmutableSchemaClass(iDocument);
     if (clazz == null)
       return false;
 

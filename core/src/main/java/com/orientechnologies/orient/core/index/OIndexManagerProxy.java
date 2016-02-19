@@ -64,10 +64,6 @@ public class OIndexManagerProxy extends OProxedResource<OIndexManager> implement
     return delegate.existsIndex(iName);
   }
 
-  public OIndex<?> getIndex(final ORID iRID) {
-    return delegate.getIndex(iRID);
-  }
-
   public OIndex<?> createIndex(final String iName, final String iType, final OIndexDefinition indexDefinition,
       final int[] clusterIdsToIndex, final OProgressListener progressListener, ODocument metadata) {
     return delegate.createIndex(iName, iType, indexDefinition, clusterIdsToIndex, progressListener, metadata);
@@ -169,5 +165,15 @@ public class OIndexManagerProxy extends OProxedResource<OIndexManager> implement
 
   public void removeClassPropertyIndex(final OIndex<?> idx) {
     delegate.removeClassPropertyIndex(idx);
+  }
+
+  @Override
+  public boolean isFullCheckpointOnChange() {
+    return delegate.isFullCheckpointOnChange();
+  }
+
+  @Override
+  public void setFullCheckpointOnChange(boolean fullCheckpointOnChange) {
+    delegate.setFullCheckpointOnChange(fullCheckpointOnChange);
   }
 }

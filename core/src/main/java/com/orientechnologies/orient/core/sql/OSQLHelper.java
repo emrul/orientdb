@@ -1,39 +1,33 @@
 /*
-  *
-  *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-  *  *
-  *  *  Licensed under the Apache License, Version 2.0 (the "License");
-  *  *  you may not use this file except in compliance with the License.
-  *  *  You may obtain a copy of the License at
-  *  *
-  *  *       http://www.apache.org/licenses/LICENSE-2.0
-  *  *
-  *  *  Unless required by applicable law or agreed to in writing, software
-  *  *  distributed under the License is distributed on an "AS IS" BASIS,
-  *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  *  *  See the License for the specific language governing permissions and
-  *  *  limitations under the License.
-  *  *
-  *  * For more information: http://www.orientechnologies.com
-  *
-  */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 package com.orientechnologies.orient.core.sql;
-
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
 
 import com.orientechnologies.common.collection.OMultiValue;
 import com.orientechnologies.common.io.OIOUtils;
 import com.orientechnologies.common.parser.OBaseParser;
+import com.orientechnologies.common.util.OPair;
 import com.orientechnologies.orient.core.command.OCommandContext;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
-import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.id.ORecordId;
+import com.orientechnologies.orient.core.metadata.schema.OImmutableClass;
 import com.orientechnologies.orient.core.metadata.schema.OProperty;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.ORecord;
@@ -50,6 +44,13 @@ import com.orientechnologies.orient.core.sql.filter.OSQLFilterItemVariable;
 import com.orientechnologies.orient.core.sql.filter.OSQLPredicate;
 import com.orientechnologies.orient.core.sql.functions.OSQLFunctionRuntime;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
  * SQL Helper class
  * 
@@ -64,6 +65,23 @@ public class OSQLHelper {
   public static final String DEFINED           = "_DEFINED_";
 
   private static ClassLoader orientClassLoader = OSQLFilterItemAbstract.class.getClassLoader();
+
+  public static Object parseDefaultValue(ODocument iRecord, final String iWord) {
+    final Object v = OSQLHelper.parseValue(iWord, null);
+
+    if (v != VALUE_NOT_PARSED) {
+      return v;
+    }
+
+    // TRY TO PARSE AS FUNCTION
+    final OSQLFunctionRuntime func = OSQLHelper.getFunction(null, iWord);
+    if (func != null) {
+      return func.execute(iRecord, iRecord, null, null);
+    }
+
+    // PARSE AS FIELD
+    return new OSQLFilterItemField(null, iWord);
+  }
 
   /**
    * Convert fields from text to real value. Supports: String, RID, Boolean, Float, Integer and NULL.
@@ -108,21 +126,28 @@ public class OSQLHelper {
         if (parts == null || parts.size() != 2)
           throw new OCommandSQLParsingException("Map found but entries are not defined as <key>:<value>");
 
-        map.put(parseValue(parts.get(0), iContext), parseValue(parts.get(1), iContext));
+        Object key = OStringSerializerHelper.decode(parseValue(parts.get(0), iContext).toString());
+        Object value = parseValue(parts.get(1), iContext);
+        if(value instanceof String){
+          value = OStringSerializerHelper.decode(value.toString());
+        }
+        map.put(key, value);
       }
 
       if (map.containsKey(ODocumentHelper.ATTRIBUTE_TYPE))
         // IT'S A DOCUMENT
-        fieldValue = new ODocument(map);
+        // TODO: IMPROVE THIS CASE AVOIDING DOUBLE PARSING
+        fieldValue = new ODocument().fromJSON(iValue);
       else
         fieldValue = map;
+
     } else if (iValue.charAt(0) == OStringSerializerHelper.EMBEDDED_BEGIN
         && iValue.charAt(iValue.length() - 1) == OStringSerializerHelper.EMBEDDED_END) {
       // SUB-COMMAND
       fieldValue = new OCommandSQL(iValue.substring(1, iValue.length() - 1));
       ((OCommandSQL) fieldValue).getContext().setParent(iContext);
 
-    } else if (iValue.charAt(0) == ORID.PREFIX)
+    } else if (ORecordId.isA(iValue))
       // RID
       fieldValue = new ORecordId(iValue.trim());
     else {
@@ -142,7 +167,12 @@ public class OSQLHelper {
       else if (iValue.equalsIgnoreCase("false"))
         // BOOLEAN, FALSE
         fieldValue = Boolean.FALSE;
-      else {
+      else if (iValue.startsWith("date(")) {
+        final OSQLFunctionRuntime func = OSQLHelper.getFunction(null, iValue);
+        if (func != null) {
+          fieldValue = func.execute(null, null, null, iContext);
+        }
+      } else {
         final Object v = parseStringNumber(iValue);
         if (v != null)
           fieldValue = v;
@@ -167,6 +197,8 @@ public class OSQLHelper {
       return Byte.parseByte(iValue);
     else if (t == OType.DOUBLE)
       return Double.parseDouble(iValue);
+    else if (t == OType.DECIMAL)
+      return new BigDecimal(iValue);
     else if (t == OType.DATE || t == OType.DATETIME)
       return new Date(Long.parseLong(iValue));
 
@@ -215,7 +247,8 @@ public class OSQLHelper {
     if (beginParenthesis > -1 && (separator == -1 || separator > beginParenthesis)) {
       final int endParenthesis = iWord.indexOf(OStringSerializerHelper.EMBEDDED_END, beginParenthesis);
 
-      if (endParenthesis > -1 && Character.isLetter(iWord.charAt(0)))
+      final char firstChar = iWord.charAt(0);
+      if (endParenthesis > -1 && (firstChar == '_' || Character.isLetter(firstChar)))
         // FUNCTION: CREATE A RUN-TIME CONTAINER FOR IT TO SAVE THE PARAMETERS
         return new OSQLFunctionRuntime(iCommand, iWord);
     }
@@ -279,8 +312,21 @@ public class OSQLHelper {
     if (iFields == null)
       return null;
 
+    final List<OPair<String, Object>> fields = new ArrayList<OPair<String, Object>>(iFields.size());
+
+    for (Map.Entry<String, Object> entry : iFields.entrySet())
+      fields.add(new OPair<String, Object>(entry.getKey(), entry.getValue()));
+
+    return bindParameters(iDocument, fields, iArguments, iContext);
+  }
+
+  public static ODocument bindParameters(final ODocument iDocument, final List<OPair<String, Object>> iFields,
+      final OCommandParameters iArguments, final OCommandContext iContext) {
+    if (iFields == null)
+      return null;
+
     // BIND VALUES
-    for (Entry<String, Object> field : iFields.entrySet()) {
+    for (OPair<String, Object> field : iFields) {
       final String fieldName = field.getKey();
       Object fieldValue = field.getValue();
 
@@ -291,8 +337,9 @@ public class OSQLHelper {
           fieldValue = ODatabaseRecordThreadLocal.INSTANCE.get().command(cmd).execute();
 
           // CHECK FOR CONVERSIONS
-          if (iDocument.getImmutableSchemaClass() != null) {
-            final OProperty prop = iDocument.getImmutableSchemaClass().getProperty(fieldName);
+          OImmutableClass immutableClass = ODocumentInternal.getImmutableSchemaClass(iDocument);
+          if (immutableClass != null) {
+            final OProperty prop = immutableClass.getProperty(fieldName);
             if (prop != null) {
               if (prop.getType() == OType.LINK) {
                 if (OMultiValue.isMultiValue(fieldValue)) {

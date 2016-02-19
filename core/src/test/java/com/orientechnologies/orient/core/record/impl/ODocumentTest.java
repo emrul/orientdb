@@ -1,20 +1,22 @@
 package com.orientechnologies.orient.core.record.impl;
 
+import org.testng.annotations.Test;
+
+import java.util.*;
+
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.db.record.ridbag.ORidBag;
 import com.orientechnologies.orient.core.id.ORecordId;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
+import com.orientechnologies.orient.core.metadata.schema.OProperty;
+import com.orientechnologies.orient.core.metadata.schema.OSchema;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.serialization.serializer.record.ORecordSerializer;
-import org.testng.annotations.Test;
 
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertNotEquals;
-import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertNull;
+import static org.testng.Assert.*;
 
 /**
- * @author <a href="mailto:enisher@gmail.com">Artem Orobets</a>
+ * @author Artem Orobets (enisher-at-gmail.com)
  */
 public class ODocumentTest {
   @Test
@@ -188,5 +190,130 @@ public class ODocumentTest {
     doc.field("link", new ORidBag());
     assertNotEquals(doc.fieldType("link"), OType.LINK);
   }
+
+  @Test
+  public void testRemovingReadonlyField() {
+    ODatabaseDocumentTx db = new ODatabaseDocumentTx("memory:" + ODocumentTest.class.getSimpleName());
+    db.create();
+    try {
+
+      OSchema schema = db.getMetadata().getSchema();
+      OClass classA = schema.createClass("TestRemovingField2");
+      classA.createProperty("name", OType.STRING);
+      OProperty property = classA.createProperty("property", OType.STRING);
+      property.setReadonly(true);
+
+      ODocument doc = new ODocument(classA);
+      doc.field("name", "My Name");
+      doc.field("property", "value1");
+      doc.save();
+
+      doc.field("name", "My Name 2");
+      doc.field("property", "value2");
+      doc.undo(); // we decided undo everything
+      doc.field("name", "My Name 3"); // change something
+      doc.save();
+      doc.field("name", "My Name 4");
+      doc.field("property", "value4");
+      doc.undo("property");// we decided undo readonly field
+      doc.save();
+    } finally {
+      db.drop();
+    }
+  }
+  
+  @Test
+  public void testSetFieldAtListIndex() {
+      ODocument doc = new ODocument();
+      
+      Map<String, Object> data = new HashMap<String, Object>();
+      
+      List<Object> parentArray = new ArrayList<Object>();
+      parentArray.add(1);
+      parentArray.add(2);
+      parentArray.add(3);
+      
+      Map<String, Object> object4 = new HashMap<String, Object>();
+      object4.put("prop", "A");
+      parentArray.add(object4);
+      
+      data.put("array", parentArray);
+      
+      doc.field("data", data);
+      
+      assertEquals(doc.field("data.array[3].prop"), "A");
+      doc.field("data.array[3].prop", "B");
+      
+      assertEquals(doc.field("data.array[3].prop"), "B");
+      
+      assertEquals(doc.field("data.array[0]"), 1);
+      doc.field("data.array[0]", 5);
+      
+      assertEquals(doc.field("data.array[0]"), 5);
+  }
+  
+  @Test
+  public void testUndo() {
+	  ODatabaseDocumentTx db = new ODatabaseDocumentTx("memory:" + ODocumentTest.class.getSimpleName());
+	    db.create();
+	    try {
+
+	      OSchema schema = db.getMetadata().getSchema();
+	      OClass classA = schema.createClass("TestUndo");
+	      classA.createProperty("name", OType.STRING);
+	      classA.createProperty("property", OType.STRING);
+
+	      ODocument doc = new ODocument(classA);
+	      doc.field("name", "My Name");
+	      doc.field("property", "value1");
+	      doc.save();
+	      assertEquals(doc.field("name"), "My Name");
+	      assertEquals(doc.field("property"), "value1");
+	      doc.undo();
+	      assertEquals(doc.field("name"), "My Name");
+	      assertEquals(doc.field("property"), "value1");
+	      doc.field("name", "My Name 2");
+	      doc.field("property", "value2");
+	      doc.undo();
+	      doc.field("name", "My Name 3");
+	      assertEquals(doc.field("name"), "My Name 3");
+	      assertEquals(doc.field("property"), "value1");
+	      doc.save();
+	      doc.field("name", "My Name 4");
+	      doc.field("property", "value4");
+	      doc.undo("property");
+	      assertEquals(doc.field("name"), "My Name 4");
+	      assertEquals(doc.field("property"), "value1");
+	      doc.save();
+	      doc.undo("property");
+	      assertEquals(doc.field("name"), "My Name 4");
+	      assertEquals(doc.field("property"), "value1");
+	      doc.undo();
+	      assertEquals(doc.field("name"), "My Name 4");
+	      assertEquals(doc.field("property"), "value1");
+	    } finally {
+	      db.drop();
+	    }
+  }
+
+
+  @Test
+  public void testMergeNull(){
+    ODocument dest = new ODocument();
+
+    ODocument source = new ODocument();
+    source.field("key","value");
+    source.field("somenull",(Object)null);
+
+    dest.merge(source,true,false);
+
+    assertEquals(dest.field("key"),"value");
+
+    assertTrue(dest.containsField("somenull"));
+
+  }
+
+
+
 
 }

@@ -3,20 +3,26 @@ package com.orientechnologies.orient.graph.batch;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery;
+import com.orientechnologies.orient.core.storage.OStorage;
 import com.tinkerpop.blueprints.Vertex;
 import com.tinkerpop.blueprints.impls.orient.OrientGraph;
-import junit.framework.TestCase;
 import org.junit.Test;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 /**
  * @author Luigi Dell'Aquila (l.dellaquila-at-orientechnologies.com)
  */
 
-public class OGraphBatchInsertTest extends TestCase {
+public class OGraphBatchInsertTest {
 
   @Test
   public void test1() {
@@ -131,6 +137,7 @@ public class OGraphBatchInsertTest extends TestCase {
     assertEquals(4, result.size());
     db.close();
   }
+
   @Test
   public void testFail1() {
     String dbUrl = "memory:batchinsert_testFail1";
@@ -146,7 +153,7 @@ public class OGraphBatchInsertTest extends TestCase {
       batch.createVertex(3L);
       fail();
     } catch (IllegalStateException e) {
-    } finally{
+    } finally {
       batch.end();
     }
   }
@@ -166,7 +173,7 @@ public class OGraphBatchInsertTest extends TestCase {
       batch.createVertex(3L);
       fail();
     } catch (IllegalStateException e) {
-    } finally{
+    } finally {
       batch.end();
     }
   }
@@ -186,6 +193,12 @@ public class OGraphBatchInsertTest extends TestCase {
 
     batch.end();
 
+    ODatabaseDocumentTx databaseDocumentTx = new ODatabaseDocumentTx(dbUrl);
+    databaseDocumentTx.open("admin", "admin");
+    OStorage storage = databaseDocumentTx.getStorage();
+    databaseDocumentTx.close();
+    storage.close(true, false);
+
     OrientGraph g = new OrientGraph(dbUrl, "admin", "admin");
 
     Iterable<Vertex> result = g.command(
@@ -194,7 +207,46 @@ public class OGraphBatchInsertTest extends TestCase {
     for (Vertex v : result) {
       assertEquals("bar", v.getProperty("foo"));
     }
+    g.shutdown();
+  }
 
+  public void testHoles() {
+    String dbUrl = "memory:batchinsert_testHoles";
+    OGraphBatchInsert batch = new OGraphBatchInsert(dbUrl, "admin", "admin");
+    batch.setParallel(1);
+    batch.begin();
+
+    batch.createEdge(0L, 1L, null);
+    batch.createEdge(1L, 3L, null);
+    batch.createEdge(3L, 4L, null);
+    Map<String, Object> vertexProps = new HashMap<String, Object>();
+    vertexProps.put("foo", "aa");
+    batch.setVertexProperties(3L, vertexProps);
+    vertexProps.put("foo", "bar");
+    batch.setVertexProperties(4L, vertexProps);
+
+    batch.end();
+
+    ODatabaseDocumentTx databaseDocumentTx = new ODatabaseDocumentTx(dbUrl);
+    databaseDocumentTx.open("admin", "admin");
+    OStorage storage = databaseDocumentTx.getStorage();
+    databaseDocumentTx.close();
+    storage.close(true, false);
+
+    OrientGraph g = new OrientGraph(dbUrl, "admin", "admin");
+
+    Iterable<Vertex> result = g.command(
+        new OSQLSynchQuery<Vertex>("select expand(out().in().out().out().in().out().out().in().out()) from V where uid = ?"))
+                               .execute(0L);
+
+    boolean found = false;
+    for (Vertex v : result) {
+      assertFalse(found);
+      assertEquals("bar", v.getProperty("foo"));
+      found = true;
+    }
+    assertTrue(found);
+    g.shutdown();
   }
 
 }

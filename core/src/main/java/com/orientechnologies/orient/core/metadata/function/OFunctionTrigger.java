@@ -19,7 +19,7 @@
  */
 package com.orientechnologies.orient.core.metadata.function;
 
-import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
+import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.hook.ODocumentHookAbstract;
 import com.orientechnologies.orient.core.record.impl.ODocument;
@@ -30,12 +30,14 @@ import com.orientechnologies.orient.core.record.impl.ODocument;
  * @author Luca Garulli
  */
 public class OFunctionTrigger extends ODocumentHookAbstract {
-  public DISTRIBUTED_EXECUTION_MODE getDistributedExecutionMode() {
-    return DISTRIBUTED_EXECUTION_MODE.TARGET_NODE;
+
+  public OFunctionTrigger(ODatabaseDocument database) {
+    super(database);
+    setIncludeClasses("OFunction");
   }
 
-  public OFunctionTrigger() {
-    setIncludeClasses("OFunction");
+  public DISTRIBUTED_EXECUTION_MODE getDistributedExecutionMode() {
+    return DISTRIBUTED_EXECUTION_MODE.TARGET_NODE;
   }
 
   @Override
@@ -54,7 +56,8 @@ public class OFunctionTrigger extends ODocumentHookAbstract {
   }
 
   protected void reloadLibrary() {
-    final ODatabaseDocument db = ODatabaseRecordThreadLocal.INSTANCE.get();
-    db.getMetadata().getFunctionLibrary().load();
+    database.getMetadata().getFunctionLibrary().load();
+
+    Orient.instance().getScriptManager().close(database.getName());
   }
 }

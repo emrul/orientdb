@@ -150,6 +150,7 @@ public abstract class OrientGraphTest extends GraphTest {
 
     graph = new OrientGraph(url);
     graph.setWarnOnForceClosingTx(false);
+    graph.setStandardExceptions(true);
 
     currentGraphs.put(url, graph);
 

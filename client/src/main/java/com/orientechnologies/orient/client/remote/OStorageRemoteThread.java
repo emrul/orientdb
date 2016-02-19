@@ -19,14 +19,25 @@
  */
 package com.orientechnologies.orient.client.remote;
 
-import com.orientechnologies.common.concur.resource.OSharedResourceAdaptiveExternal;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.command.OCommandOutputListener;
 import com.orientechnologies.orient.core.command.OCommandRequestText;
 import com.orientechnologies.orient.core.config.OStorageConfiguration;
 import com.orientechnologies.orient.core.conflict.ORecordConflictStrategy;
 import com.orientechnologies.orient.core.db.record.OCurrentStorageComponentsFactory;
+import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.db.record.ridbag.sbtree.OSBTreeCollectionManager;
+import com.orientechnologies.orient.core.exception.ORecordNotFoundException;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.id.ORecordId;
 import com.orientechnologies.orient.core.record.impl.ODocument;
@@ -44,15 +55,6 @@ import com.orientechnologies.orient.core.version.OVersionFactory;
 import com.orientechnologies.orient.enterprise.channel.binary.OChannelBinaryAsynchClient;
 import com.orientechnologies.orient.enterprise.channel.binary.ORemoteServerEventListener;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.util.Collection;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.Callable;
-import java.util.concurrent.atomic.AtomicInteger;
-
 /**
  * Wrapper of OStorageRemote that maintains the sessionId. It's bound to the ODatabase and allow to use the shared OStorageRemote.
  */
@@ -63,6 +65,7 @@ public class OStorageRemoteThread implements OStorageProxy {
   private final OStorageRemote delegate;
   private String               serverURL;
   private int                  sessionId;
+  private byte[]               token;
 
   public OStorageRemoteThread(final OStorageRemote iSharedStorage) {
     delegate = iSharedStorage;
@@ -145,19 +148,11 @@ public class OStorageRemoteThread implements OStorageProxy {
     }
   }
 
-  public OSharedResourceAdaptiveExternal getLock() {
-    pushSession();
-    try {
-      return delegate.getLock();
-    } finally {
-      popSession();
-    }
-  }
-
-  public void setSessionId(final String iServerURL, final int iSessionId) {
+  public void setSessionId(final String iServerURL, final int iSessionId, byte[] iToken) {
     serverURL = iServerURL;
     sessionId = iSessionId;
-    delegate.setSessionId(serverURL, iSessionId);
+    token = iToken;
+    delegate.setSessionId(serverURL, iSessionId, iToken);
   }
 
   public void reload() {
@@ -213,6 +208,11 @@ public class OStorageRemoteThread implements OStorageProxy {
     return delegate;
   }
 
+  @Override
+  public boolean isRemote() {
+    return true;
+  }
+
   public Set<String> getClusterNames() {
     pushSession();
     try {
@@ -223,8 +223,7 @@ public class OStorageRemoteThread implements OStorageProxy {
   }
 
   @Override
-  public void backup(OutputStream out, Map<String, Object> options, final Callable<Object> callable,
-      final OCommandOutputListener iListener, int compressionLevel, int bufferSize) throws IOException {
+  public List<String> backup(OutputStream out, Map<String, Object> options, final Callable<Object> callable, final OCommandOutputListener iListener, int compressionLevel, int bufferSize) throws IOException {
     throw new UnsupportedOperationException("backup");
   }
 
@@ -245,10 +244,21 @@ public class OStorageRemoteThread implements OStorageProxy {
   }
 
   public OStorageOperationResult<ORawBuffer> readRecord(final ORecordId iRid, final String iFetchPlan, boolean iIgnoreCache,
-      ORecordCallback<ORawBuffer> iCallback, boolean loadTombstones, LOCKING_STRATEGY iLockingStrategy) {
+      ORecordCallback<ORawBuffer> iCallback) {
     pushSession();
     try {
-      return delegate.readRecord(iRid, iFetchPlan, iIgnoreCache, null, loadTombstones, LOCKING_STRATEGY.DEFAULT);
+      return delegate.readRecord(iRid, iFetchPlan, iIgnoreCache, null);
+    } finally {
+      popSession();
+    }
+  }
+
+  @Override
+  public OStorageOperationResult<ORawBuffer> readRecordIfVersionIsNotLatest(ORecordId rid, String fetchPlan, boolean ignoreCache,
+      ORecordVersion recordVersion) throws ORecordNotFoundException {
+    pushSession();
+    try {
+      return delegate.readRecordIfVersionIsNotLatest(rid, fetchPlan, ignoreCache, recordVersion);
     } finally {
       popSession();
     }
@@ -572,10 +582,10 @@ public class OStorageRemoteThread implements OStorageProxy {
     }
   }
 
-  public void updateClusterConfiguration(final byte[] iContent) {
+  public void updateClusterConfiguration(final String iCurrentURL, final byte[] iContent) {
     pushSession();
     try {
-      delegate.updateClusterConfiguration(iContent);
+      delegate.updateClusterConfiguration(iCurrentURL, iContent);
     } finally {
       popSession();
     }
@@ -591,7 +601,7 @@ public class OStorageRemoteThread implements OStorageProxy {
   }
 
   public boolean isClosed() {
-    return sessionId < 0 || delegate.isClosed();
+    return (sessionId < 0 && token == null) || delegate.isClosed();
   }
 
   public boolean checkForRecordValidity(final OPhysicalPosition ppos) {
@@ -601,6 +611,11 @@ public class OStorageRemoteThread implements OStorageProxy {
     } finally {
       popSession();
     }
+  }
+
+  @Override
+  public boolean isAssigningClusterIds() {
+    return false;
   }
 
   public String getName() {
@@ -682,6 +697,21 @@ public class OStorageRemoteThread implements OStorageProxy {
   }
 
   @Override
+  public Object indexGet(final String iIndexName, final Object iKey, final String iFetchPlan) {
+    return delegate.indexGet(iIndexName, iKey, iFetchPlan);
+  }
+
+  @Override
+  public void indexPut(final String iIndexName, Object iKey, final OIdentifiable iValue) {
+    delegate.indexPut(iIndexName, iKey, iValue);
+  }
+
+  @Override
+  public boolean indexRemove(final String iIndexName, final Object iKey) {
+    return delegate.indexRemove(iIndexName, iKey);
+  }
+
+  @Override
   public String getType() {
     return delegate.getType();
   }
@@ -702,11 +732,13 @@ public class OStorageRemoteThread implements OStorageProxy {
   }
 
   protected void pushSession() {
-    delegate.setSessionId(serverURL, sessionId);
+    delegate.setSessionId(serverURL, sessionId, token);
   }
 
   protected void popSession() {
     serverURL = delegate.getServerURL();
     sessionId = delegate.getSessionId();
+    token = delegate.getSessionToken();
+    // delegate.clearSession();
   }
 }

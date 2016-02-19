@@ -25,6 +25,7 @@ import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OProperty;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.impl.ODocument;
+import com.orientechnologies.orient.core.record.impl.ODocumentInternal;
 
 import java.util.*;
 
@@ -60,7 +61,7 @@ public class ODocumentFieldWalker {
 
     final boolean updateMode = fieldWalker.updateMode();
 
-    final OClass clazz = document.getImmutableSchemaClass();
+    final OClass clazz = ODocumentInternal.getImmutableSchemaClass(document);
     for (String fieldName : document.fieldNames()) {
 
       final OType concreteType = document.fieldType(fieldName);
@@ -95,13 +96,12 @@ public class ODocumentFieldWalker {
         if (fieldWalker.goDeeper(fieldType, linkedType, fieldValue)) {
           if (fieldValue instanceof Map)
             walkMap((Map) fieldValue, fieldType, fieldWalker, walked);
-          else if (OMultiValue.isIterable(fieldValue))
-            walkIterable(OMultiValue.getMultiValueIterable(fieldValue), fieldType, fieldWalker, walked);
           else if (fieldValue instanceof ODocument) {
             final ODocument doc = (ODocument) fieldValue;
             if (OType.EMBEDDED.equals(fieldType) || doc.isEmbedded())
               walkDocument((ODocument) fieldValue, fieldWalker);
-          }
+          } else if (OMultiValue.isIterable(fieldValue))
+            walkIterable(OMultiValue.getMultiValueIterable(fieldValue), fieldType, fieldWalker, walked);
         }
       }
 

@@ -66,11 +66,15 @@ public class ORecordSerializerBinary implements ORecordSerializer {
 
     BytesContainer container = new BytesContainer(iSource);
     container.skip(1);
+
     try {
-      serializerByVersion[iSource[0]].deserialize((ODocument) iRecord, container, iFields);
-    } catch (IndexOutOfBoundsException e) {
-      OLogManager.instance().warn(this, "Error deserializing record %s send this data for debugging",
-          OBase64Utils.encodeBytes(iSource));
+      if (iFields != null && iFields.length > 0)
+        serializerByVersion[iSource[0]].deserializePartial((ODocument) iRecord, container, iFields);
+      else
+        serializerByVersion[iSource[0]].deserialize((ODocument) iRecord, container);
+    } catch (RuntimeException e) {
+      OLogManager.instance().warn(this, "Error deserializing record with id %s send this data for debugging: %s ",
+          iRecord.getIdentity().toString(), OBase64Utils.encodeBytes(iSource));
       throw e;
     }
     return iRecord;
@@ -79,13 +83,30 @@ public class ORecordSerializerBinary implements ORecordSerializer {
   @Override
   public byte[] toStream(final ORecord iSource, final boolean iOnlyDelta) {
     checkTypeODocument(iSource);
-    if (!OSerializationSetThreadLocal.checkAndAdd((ODocument) iSource))
-      return null;
-    BytesContainer container = new BytesContainer();
+
+    final BytesContainer container = new BytesContainer();
+
+    // WRITE SERIALIZER VERSION
     int pos = container.alloc(1);
     container.bytes[pos] = CURRENT_RECORD_VERSION;
-    serializerByVersion[CURRENT_RECORD_VERSION].serialize((ODocument) iSource, container);
-    OSerializationSetThreadLocal.removeCheck((ODocument) iSource);
+
+    if (!OSerializationSetThreadLocal.checkAndAdd((ODocument) iSource)) {
+      // SERIALIZE CLASS ONLY
+      serializerByVersion[CURRENT_RECORD_VERSION].serialize((ODocument) iSource, container, true);
+
+      // SET SERIALIZATION AS PARTIAL
+      OSerializationSetThreadLocal.setPartial((ODocument) iSource);
+
+      return container.fitBytes();
+    }
+
+    try {
+      // SERIALIZE RECORD
+      serializerByVersion[CURRENT_RECORD_VERSION].serialize((ODocument) iSource, container, false);
+    } finally {
+      OSerializationSetThreadLocal.removeCheck((ODocument) iSource);
+    }
+    
     return container.fitBytes();
   }
 

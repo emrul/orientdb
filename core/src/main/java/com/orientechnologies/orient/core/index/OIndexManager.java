@@ -1,28 +1,29 @@
 /*
-  *
-  *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-  *  *
-  *  *  Licensed under the Apache License, Version 2.0 (the "License");
-  *  *  you may not use this file except in compliance with the License.
-  *  *  You may obtain a copy of the License at
-  *  *
-  *  *       http://www.apache.org/licenses/LICENSE-2.0
-  *  *
-  *  *  Unless required by applicable law or agreed to in writing, software
-  *  *  distributed under the License is distributed on an "AS IS" BASIS,
-  *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  *  *  See the License for the specific language governing permissions and
-  *  *  limitations under the License.
-  *  *
-  *  * For more information: http://www.orientechnologies.com
-  *
-  */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 package com.orientechnologies.orient.core.index;
 
 import java.util.Collection;
 import java.util.Set;
 
 import com.orientechnologies.common.listener.OProgressListener;
+import com.orientechnologies.common.util.OApi;
 import com.orientechnologies.orient.core.dictionary.ODictionary;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.record.ORecord;
@@ -83,16 +84,6 @@ public interface OIndexManager {
    */
   public boolean existsIndex(final String iName);
 
-  /**
-   * Searches for index by id of its configuration.
-   * 
-   * IMPORTANT! Only for internal usage.
-   * 
-   * @param iRID
-   *          id of index configuration.
-   * @return an index, or null if such does not exist.
-   */
-  public OIndex<?> getIndex(final ORID iRID);
 
   /**
    * Creates a new index with default algorithm.
@@ -145,6 +136,7 @@ public interface OIndexManager {
    *          the name of index to drop
    * @return this
    */
+  @OApi(maturity = OApi.MATURITY.STABLE)
   public OIndexManager dropIndex(final String iIndexName);
 
   /**
@@ -320,4 +312,14 @@ public interface OIndexManager {
    *          index to remove.
    */
   void removeClassPropertyIndex(OIndex<?> idx);
+
+  /**
+   * IMPORTANT! Only for internal usage.
+   */
+  boolean isFullCheckpointOnChange();
+
+	/**
+	 * IMPORTANT! Only for internal usage.
+	 */
+	void setFullCheckpointOnChange(boolean fullCheckpointOnChange);
 }

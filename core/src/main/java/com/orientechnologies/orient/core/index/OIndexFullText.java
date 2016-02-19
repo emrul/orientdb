@@ -1,27 +1,27 @@
 /*
-  *
-  *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
-  *  *
-  *  *  Licensed under the Apache License, Version 2.0 (the "License");
-  *  *  you may not use this file except in compliance with the License.
-  *  *  You may obtain a copy of the License at
-  *  *
-  *  *       http://www.apache.org/licenses/LICENSE-2.0
-  *  *
-  *  *  Unless required by applicable law or agreed to in writing, software
-  *  *  distributed under the License is distributed on an "AS IS" BASIS,
-  *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  *  *  See the License for the specific language governing permissions and
-  *  *  limitations under the License.
-  *  *
-  *  * For more information: http://www.orientechnologies.com
-  *
-  */
+ *
+ *  *  Copyright 2014 Orient Technologies LTD (info(at)orientechnologies.com)
+ *  *
+ *  *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  *  you may not use this file except in compliance with the License.
+ *  *  You may obtain a copy of the License at
+ *  *
+ *  *       http://www.apache.org/licenses/LICENSE-2.0
+ *  *
+ *  *  Unless required by applicable law or agreed to in writing, software
+ *  *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  *  See the License for the specific language governing permissions and
+ *  *  limitations under the License.
+ *  *
+ *  * For more information: http://www.orientechnologies.com
+ *
+ */
 package com.orientechnologies.orient.core.index;
 
 import com.orientechnologies.common.listener.OProgressListener;
+import com.orientechnologies.orient.core.db.ODatabase;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
-import com.orientechnologies.orient.core.db.record.ORecordElement;
 import com.orientechnologies.orient.core.db.record.ridbag.sbtree.OIndexRIDContainer;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.serialization.serializer.OStringSerializerHelper;
@@ -32,7 +32,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /**
@@ -61,12 +60,16 @@ public class OIndexFullText extends OIndexMultiValues {
 
   private Set<String>          stopWords;
 
-  public OIndexFullText(String typeId, String algorithm, OIndexEngine<Set<OIdentifiable>> indexEngine,
+  public OIndexFullText(String name, String typeId, String algorithm, OIndexEngine<Set<OIdentifiable>> indexEngine,
       String valueContainerAlgorithm, ODocument metadata) {
-    super(typeId, algorithm, indexEngine, valueContainerAlgorithm, metadata);
-    config();
-    configWithMetadata(metadata);
-
+    super(name, typeId, algorithm, indexEngine, valueContainerAlgorithm, metadata);
+    acquireExclusiveLock();
+    try {
+      config();
+      configWithMetadata(metadata);
+    } finally {
+      releaseExclusiveLock();
+    }
   }
 
   /**
@@ -82,52 +85,63 @@ public class OIndexFullText extends OIndexMultiValues {
 
     key = getCollatingValue(key);
 
-    modificationLock.requestModificationLock();
+    final ODatabase database = getDatabase();
+    final boolean txIsActive = database.getTransaction().isActive();
+
+    if (!txIsActive)
+      keyLockManager.acquireExclusiveLock(key);
 
     try {
-      final Set<String> words = splitIntoWords(key.toString());
+      modificationLock.requestModificationLock();
 
-      // FOREACH WORD CREATE THE LINK TO THE CURRENT DOCUMENT
-      for (final String word : words) {
-        acquireExclusiveLock();
-        startStorageAtomicOperation();
-        try {
-          Set<OIdentifiable> refs;
+      try {
+        final Set<String> words = splitIntoWords(key.toString());
 
-          // SEARCH FOR THE WORD
-          refs = indexEngine.get(word);
+        // FOREACH WORD CREATE THE LINK TO THE CURRENT DOCUMENT
+        for (final String word : words) {
+          acquireSharedLock();
+          startStorageAtomicOperation();
+          try {
+            Set<OIdentifiable> refs;
 
-          if (refs == null) {
-            // WORD NOT EXISTS: CREATE THE KEYWORD CONTAINER THE FIRST TIME THE WORD IS FOUND
-            if (ODefaultIndexFactory.SBTREEBONSAI_VALUE_CONTAINER.equals(valueContainerAlgorithm)) {
-              boolean durable = false;
-              if (metadata != null && Boolean.TRUE.equals(metadata.field("durableInNonTxMode")))
-                durable = true;
+            // SEARCH FOR THE WORD
+            refs = indexEngine.get(word);
 
-              refs = new OIndexRIDContainer(getName(), durable);
-            } else {
-              refs = new OMVRBTreeRIDSet();
-              ((OMVRBTreeRIDSet) refs).setAutoConvertToRecord(false);
+            if (refs == null) {
+              // WORD NOT EXISTS: CREATE THE KEYWORD CONTAINER THE FIRST TIME THE WORD IS FOUND
+              if (ODefaultIndexFactory.SBTREEBONSAI_VALUE_CONTAINER.equals(valueContainerAlgorithm)) {
+                boolean durable = false;
+                if (metadata != null && Boolean.TRUE.equals(metadata.field("durableInNonTxMode")))
+                  durable = true;
+
+                refs = new OIndexRIDContainer(getName(), durable);
+              } else {
+                refs = new OMVRBTreeRIDSet();
+                ((OMVRBTreeRIDSet) refs).setAutoConvertToRecord(false);
+              }
             }
+
+            // ADD THE CURRENT DOCUMENT AS REF FOR THAT WORD
+            refs.add(iSingleValue);
+
+            // SAVE THE INDEX ENTRY
+            indexEngine.put(word, refs);
+
+            commitStorageAtomicOperation();
+          } catch (RuntimeException e) {
+            rollbackStorageAtomicOperation();
+            throw new OIndexException("Error during put of key - value entry", e);
+          } finally {
+            releaseSharedLock();
           }
-
-          // ADD THE CURRENT DOCUMENT AS REF FOR THAT WORD
-          refs.add(iSingleValue);
-
-          // SAVE THE INDEX ENTRY
-          indexEngine.put(word, refs);
-
-          commitStorageAtomicOperation();
-        } catch (RuntimeException e) {
-          rollbackStorageAtomicOperation();
-          throw new OIndexException("Error during put of key - value entry", e);
-        } finally {
-          releaseExclusiveLock();
         }
+        return this;
+      } finally {
+        modificationLock.releaseModificationLock();
       }
-      return this;
     } finally {
-      modificationLock.releaseModificationLock();
+      if (!txIsActive)
+        keyLockManager.releaseExclusiveLock(key);
     }
   }
 
@@ -147,51 +161,61 @@ public class OIndexFullText extends OIndexMultiValues {
 
     key = getCollatingValue(key);
 
-    modificationLock.requestModificationLock();
+    final ODatabase database = getDatabase();
+    final boolean txIsActive = database.getTransaction().isActive();
 
+    if (!txIsActive)
+      keyLockManager.acquireExclusiveLock(key);
     try {
-      final Set<String> words = splitIntoWords(key.toString());
-      boolean removed = false;
+      modificationLock.requestModificationLock();
 
-      for (final String word : words) {
-        acquireExclusiveLock();
-        startStorageAtomicOperation();
-        try {
+      try {
+        final Set<String> words = splitIntoWords(key.toString());
+        boolean removed = false;
 
-          final Set<OIdentifiable> recs = indexEngine.get(word);
-          if (recs != null && !recs.isEmpty()) {
-            if (recs.remove(value)) {
-              if (recs.isEmpty())
-                indexEngine.remove(word);
-              else
-                indexEngine.put(word, recs);
-              removed = true;
+        for (final String word : words) {
+          acquireSharedLock();
+          startStorageAtomicOperation();
+          try {
+
+            final Set<OIdentifiable> recs = indexEngine.get(word);
+            if (recs != null && !recs.isEmpty()) {
+              if (recs.remove(value)) {
+                if (recs.isEmpty())
+                  indexEngine.remove(word);
+                else
+                  indexEngine.put(word, recs);
+                removed = true;
+              }
             }
+            commitStorageAtomicOperation();
+          } catch (RuntimeException e) {
+            rollbackStorageAtomicOperation();
+            throw new OIndexException("Error during removal of entry by key and value", e);
+          } finally {
+            releaseSharedLock();
           }
-          commitStorageAtomicOperation();
-        } catch (RuntimeException e) {
-          rollbackStorageAtomicOperation();
-          throw new OIndexException("Error during removal of entry by key and value", e);
-        } finally {
-          releaseExclusiveLock();
         }
-      }
 
-      return removed;
+        return removed;
+      } finally {
+        modificationLock.releaseModificationLock();
+      }
     } finally {
-      modificationLock.releaseModificationLock();
+      if (!txIsActive)
+        keyLockManager.releaseExclusiveLock(key);
     }
   }
 
   @Override
-  public OIndexInternal<?> create(String name, OIndexDefinition indexDefinition, String clusterIndexName,
-      Set<String> clustersToIndex, boolean rebuild, OProgressListener progressListener, OStreamSerializer valueSerializer) {
+  public OIndexInternal<?> create(OIndexDefinition indexDefinition, String clusterIndexName, Set<String> clustersToIndex,
+      boolean rebuild, OProgressListener progressListener, OStreamSerializer valueSerializer) {
 
     if (indexDefinition.getFields().size() > 1) {
       throw new OIndexException(type + " indexes cannot be used as composite ones.");
     }
 
-    return super.create(name, indexDefinition, clusterIndexName, clustersToIndex, rebuild, progressListener, valueSerializer);
+    return super.create(indexDefinition, clusterIndexName, clustersToIndex, rebuild, progressListener, valueSerializer);
   }
 
   @Override
@@ -204,21 +228,14 @@ public class OIndexFullText extends OIndexMultiValues {
   }
 
   @Override
-  public ODocument updateConfiguration() {
-    super.updateConfiguration();
-    configuration.setInternalStatus(ORecordElement.STATUS.UNMARSHALLING);
+  protected void doConfigurationUpdate(ODocument newConfig) {
+    super.doConfigurationUpdate(newConfig);
 
-    try {
-      configuration.field(CONFIG_SEPARATOR_CHARS, separatorChars);
-      configuration.field(CONFIG_IGNORE_CHARS, ignoreChars);
-      configuration.field(CONFIG_STOP_WORDS, stopWords);
-      configuration.field(CONFIG_MIN_WORD_LEN, minWordLength);
-      configuration.field(CONFIG_INDEX_RADIX, indexRadix);
-
-    } finally {
-      configuration.setInternalStatus(ORecordElement.STATUS.LOADED);
-    }
-    return configuration;
+    newConfig.field(CONFIG_SEPARATOR_CHARS, separatorChars);
+    newConfig.field(CONFIG_IGNORE_CHARS, ignoreChars);
+    newConfig.field(CONFIG_STOP_WORDS, stopWords);
+    newConfig.field(CONFIG_MIN_WORD_LEN, minWordLength);
+    newConfig.field(CONFIG_INDEX_RADIX, indexRadix);
   }
 
   public boolean canBeUsedInEqualityOperators() {
@@ -255,73 +272,6 @@ public class OIndexFullText extends OIndexMultiValues {
     separatorChars = DEF_SEPARATOR_CHARS;
     minWordLength = DEF_MIN_WORD_LENGTH;
     stopWords = new HashSet<String>(OStringSerializerHelper.split(DEF_STOP_WORDS, ' '));
-  }
-
-  @Override
-  protected void putInSnapshot(Object key, OIdentifiable value, Map<Object, Object> snapshot) {
-    if (key == null)
-      return;
-
-    key = getCollatingValue(key);
-
-    final Set<String> words = splitIntoWords(key.toString());
-
-    // FOREACH WORD CREATE THE LINK TO THE CURRENT DOCUMENT
-    for (final String word : words) {
-      Set<OIdentifiable> refs;
-
-      final Object snapshotValue = snapshot.get(word);
-      if (snapshotValue == null)
-        refs = indexEngine.get(word);
-      else if (snapshotValue.equals(RemovedValue.INSTANCE))
-        refs = null;
-      else
-        refs = (Set<OIdentifiable>) snapshotValue;
-
-      if (refs == null) {
-        // WORD NOT EXISTS: CREATE THE KEYWORD CONTAINER THE FIRST TIME THE WORD IS FOUND
-        if (ODefaultIndexFactory.SBTREEBONSAI_VALUE_CONTAINER.equals(valueContainerAlgorithm)) {
-          boolean durable = false;
-          if (metadata != null && Boolean.TRUE.equals(metadata.field("durableInNonTxMode")))
-            durable = true;
-
-          refs = new OIndexRIDContainer(getName(), durable);
-        } else {
-          refs = new OMVRBTreeRIDSet();
-          ((OMVRBTreeRIDSet) refs).setAutoConvertToRecord(false);
-        }
-
-        snapshot.put(word, refs);
-      }
-      // ADD THE CURRENT DOCUMENT AS REF FOR THAT WORD
-      refs.add(value.getIdentity());
-    }
-  }
-
-  @Override
-  protected void removeFromSnapshot(Object key, OIdentifiable value, Map<Object, Object> snapshot) {
-    key = getCollatingValue(key);
-
-    final Set<String> words = splitIntoWords(key.toString());
-    for (final String word : words) {
-      final Set<OIdentifiable> recs;
-      final Object snapshotValue = snapshot.get(word);
-      if (snapshotValue == null)
-        recs = indexEngine.get(word);
-      else if (snapshotValue.equals(RemovedValue.INSTANCE))
-        recs = null;
-      else
-        recs = (Set<OIdentifiable>) snapshotValue;
-
-      if (recs != null && !recs.isEmpty()) {
-        if (recs.remove(value)) {
-          if (recs.isEmpty())
-            snapshot.put(word, RemovedValue.INSTANCE);
-          else
-            snapshot.put(word, recs);
-        }
-      }
-    }
   }
 
   private Set<String> splitIntoWords(final String iKey) {

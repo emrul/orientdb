@@ -20,12 +20,13 @@
 
 package com.orientechnologies.orient.server.distributed;
 
-import junit.framework.Assert;
+import org.junit.Assert;
 
 import org.junit.Test;
 
 import com.orientechnologies.orient.core.exception.OValidationException;
 import com.orientechnologies.orient.core.metadata.schema.OType;
+import com.orientechnologies.orient.core.sql.OCommandSQL;
 import com.tinkerpop.blueprints.impls.orient.OrientGraph;
 import com.tinkerpop.blueprints.impls.orient.OrientGraphFactory;
 import com.tinkerpop.blueprints.impls.orient.OrientGraphNoTx;
@@ -113,6 +114,8 @@ public class ServerClusterSchemaTest extends AbstractServerClusterTest {
         for (int i = 0; i < SERVERS; ++i) {
           try {
             final OrientVertex v = g.addVertex("class:" + "Client" + i);
+            g.commit();
+
             Assert.assertTrue(false);
           } catch (OValidationException e) {
             // EXPECTED
@@ -122,5 +125,22 @@ public class ServerClusterSchemaTest extends AbstractServerClusterTest {
         g.shutdown();
       }
     }
+
+    for (int s = 0; s < SERVERS; ++s) {
+      OrientGraphFactory factory = new OrientGraphFactory("plocal:target/server" + s + "/databases/" + getDatabaseName());
+      OrientGraphNoTx g = factory.getNoTx();
+
+      try {
+        for (int i = 0; i < SERVERS; ++i) {
+          g.command(new OCommandSQL("create class TestNewClassIfCanBeDropAndRecreated extends V")).execute();
+          g.command(new OCommandSQL("drop class TestNewClassIfCanBeDropAndRecreated")).execute();
+          g.command(new OCommandSQL("create class TestNewClassIfCanBeDropAndRecreated extends V")).execute();
+          g.command(new OCommandSQL("drop class TestNewClassIfCanBeDropAndRecreated")).execute();
+        }
+      } finally {
+        g.shutdown();
+      }
+    }
   }
+
 }

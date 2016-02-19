@@ -29,7 +29,7 @@ import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.index.sbtreebonsai.local.OSBTreeBonsai;
 
 /**
- * @author <a href="mailto:enisher@gmail.com">Artem Orobets</a>
+ * @author Artem Orobets (enisher-at-gmail.com)
  */
 public abstract class OSBTreeCollectionManagerAbstract implements OCloseable, OSBTreeCollectionManager {
   public static final String                                                             FILE_NAME_PREFIX  = "collections_";
@@ -134,7 +134,7 @@ public abstract class OSBTreeCollectionManagerAbstract implements OCloseable, OS
       assert container != null;
 
       if (container.usagesCounter != 0)
-        throw new IllegalStateException("Can not delete SBTreeBonsai instance because it is used in other thread.");
+        throw new IllegalStateException("Cannot delete SBTreeBonsai instance because it is used in other thread.");
 
       treeCache.remove(collectionPointer);
     }
@@ -155,7 +155,7 @@ public abstract class OSBTreeCollectionManagerAbstract implements OCloseable, OS
   }
 
   @Override
-  public void close(boolean onDelete) {
+  public void close() {
     treeCache.clear();
   }
 

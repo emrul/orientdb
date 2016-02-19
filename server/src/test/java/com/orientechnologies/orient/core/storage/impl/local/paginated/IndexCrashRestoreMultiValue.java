@@ -1,5 +1,22 @@
 package com.orientechnologies.orient.core.storage.impl.local.paginated;
 
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.testng.Assert;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.Test;
+
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
@@ -11,22 +28,9 @@ import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.sql.OCommandSQL;
 import com.orientechnologies.orient.server.OServer;
 import com.orientechnologies.orient.server.OServerMain;
-import org.testng.Assert;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
-import org.testng.annotations.BeforeMethod;
-import org.testng.annotations.Test;
-
-import java.io.File;
-import java.util.*;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * @author Andrey Lomakin <a href="mailto:lomakin.andrey@gmail.com">Andrey Lomakin</a>
+ * @author Andrey Lomakin (a.lomakin-at-orientechnologies.com)
  * @since 9/25/14
  */
 @Test
@@ -42,7 +46,9 @@ public class IndexCrashRestoreMultiValue {
 
   @BeforeClass
   public void beforeClass() throws Exception {
+    OGlobalConfiguration.WAL_FUZZY_CHECKPOINT_INTERVAL.setValue(1000000);
     OGlobalConfiguration.RID_BAG_EMBEDDED_TO_SBTREEBONSAI_THRESHOLD.setValue(3);
+    OGlobalConfiguration.FILE_LOCK.setValue(false);
 
     String buildDirectory = System.getProperty("buildDirectory", ".");
     buildDirectory += "/indexCrashRestoreMultiValue";
@@ -67,7 +73,10 @@ public class IndexCrashRestoreMultiValue {
 
   @AfterClass
   public void afterClass() {
+    ODatabaseRecordThreadLocal.INSTANCE.set(testDocumentTx);
     testDocumentTx.drop();
+
+    ODatabaseRecordThreadLocal.INSTANCE.set(baseDocumentTx);
     baseDocumentTx.drop();
 
     Assert.assertTrue(new File(buildDir, "plugins").delete());
@@ -91,6 +100,7 @@ public class IndexCrashRestoreMultiValue {
   public static final class RemoteDBRunner {
     public static void main(String[] args) throws Exception {
       OGlobalConfiguration.RID_BAG_EMBEDDED_TO_SBTREEBONSAI_THRESHOLD.setValue(3);
+      OGlobalConfiguration.WAL_FUZZY_CHECKPOINT_INTERVAL.setValue(100000000);
 
       OServer server = OServerMain.create();
       server
@@ -110,15 +120,14 @@ public class IndexCrashRestoreMultiValue {
     System.out.println("Start data propagation");
 
     List<Future> futures = new ArrayList<Future>();
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 8; i++) {
       futures.add(executorService.submit(new DataPropagationTask(baseDocumentTx, testDocumentTx)));
     }
 
-    Thread.sleep(150000);
+    Thread.sleep(300000);
 
     System.out.println("Wait for process to destroy");
-    Process p = Runtime.getRuntime().exec("pkill -9 -f RemoteDBRunner");
-    p.waitFor();
+    // process.destroyForcibly();
 
     process.waitFor();
     System.out.println("Process was destroyed");
@@ -233,11 +242,21 @@ public class IndexCrashRestoreMultiValue {
           }
 
         }
+      } catch (Exception e) {
+
       } finally {
-        baseDB.close();
-        testDB.close();
+        try {
+          baseDB.close();
+        } catch (Exception e) {
+        }
+
+        try {
+          testDB.close();
+        } catch (Exception e) {
+        }
       }
+
+      return null;
     }
   }
-
 }

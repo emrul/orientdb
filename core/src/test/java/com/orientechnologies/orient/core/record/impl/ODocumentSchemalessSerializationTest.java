@@ -1,5 +1,6 @@
 package com.orientechnologies.orient.core.record.impl;
 
+import static org.testng.AssertJUnit.assertTrue;
 import static org.testng.Assert.assertEquals;
 import static org.testng.AssertJUnit.assertNotNull;
 
@@ -21,6 +22,7 @@ import com.orientechnologies.orient.core.id.ORecordId;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.serialization.serializer.record.ORecordSerializer;
 import com.orientechnologies.orient.core.serialization.serializer.record.string.ORecordSerializerSchemaAware2CSV;
+import com.orientechnologies.orient.core.serialization.serializer.record.string.ORecordSerializerStringAbstract;
 
 public class ODocumentSchemalessSerializationTest {
 
@@ -270,7 +272,7 @@ public class ODocumentSchemalessSerializationTest {
   }
 
   @Test
-  private void testCollectionOfEmbeddedDocument() {
+  public void testCollectionOfEmbeddedDocument() {
 
     ODocument document = new ODocument();
 
@@ -308,4 +310,11 @@ public class ODocumentSchemalessSerializationTest {
     assertEquals(inSet.field("surname"), embeddedInSet.field("surname"));
   }
 
+  @Test(enabled = false)
+  public void testCsvGetTypeByValue() {
+    Object res = ORecordSerializerStringAbstract.getTypeValue("-");
+    assertTrue(res instanceof String);
+    res = ORecordSerializerStringAbstract.getTypeValue("-email-@gmail.com");
+    assertTrue(res instanceof String);
+  }
 }

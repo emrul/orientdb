@@ -29,9 +29,8 @@ import com.orientechnologies.orient.core.record.impl.ORecordFlat;
 
 @Test(groups = { "crud", "record-csv" }, sequential = true)
 public class CRUDFlatPhysicalTest extends DocumentDBBaseTest {
-  private static final String CLUSTER_NAME = "binary";
   protected static final int  TOT_RECORDS  = 100;
-
+  private static final String CLUSTER_NAME = "binary";
   protected long              startRecordNumber;
   private ORecordFlat         record;
 
@@ -57,14 +56,11 @@ public class CRUDFlatPhysicalTest extends DocumentDBBaseTest {
       record.reset();
       record.value(i + "-binary test").save(CLUSTER_NAME);
     }
-  }
 
-  @Test(dependsOnMethods = "createRaw")
-  public void testCreateRaw() {
     Assert.assertEquals(database.countClusterElements(CLUSTER_NAME) - startRecordNumber, TOT_RECORDS);
   }
 
-  @Test(dependsOnMethods = "testCreateRaw")
+  @Test(dependsOnMethods = "createRaw")
   public void readRawWithExpressiveForwardIterator() {
     String[] fields;
 
@@ -72,8 +68,7 @@ public class CRUDFlatPhysicalTest extends DocumentDBBaseTest {
     for (int i = 0; i < TOT_RECORDS; i++)
       ids.add(i);
 
-    for (ORecordFlat rec : new ORecordIteratorCluster<ORecordFlat>(database, database, database.getClusterIdByName(CLUSTER_NAME),
-        true)) {
+    for (ORecordFlat rec : new ORecordIteratorCluster<ORecordFlat>(database, database, database.getClusterIdByName(CLUSTER_NAME))) {
       fields = rec.value().split("-");
 
       int i = Integer.parseInt(fields[0]);
@@ -87,8 +82,7 @@ public class CRUDFlatPhysicalTest extends DocumentDBBaseTest {
   public void updateRaw() {
     String[] fields;
 
-    for (ORecordFlat rec : new ORecordIteratorCluster<ORecordFlat>(database, database, database.getClusterIdByName(CLUSTER_NAME),
-        true)) {
+    for (ORecordFlat rec : new ORecordIteratorCluster<ORecordFlat>(database, database, database.getClusterIdByName(CLUSTER_NAME))) {
       fields = rec.value().split("-");
       int i = Integer.parseInt(fields[0]);
       if (i % 2 == 0) {
@@ -106,8 +100,7 @@ public class CRUDFlatPhysicalTest extends DocumentDBBaseTest {
     for (int i = 0; i < TOT_RECORDS; i++)
       ids.add(i);
 
-    for (ORecordFlat rec : new ORecordIteratorCluster<ORecordFlat>(database, database, database.getClusterIdByName(CLUSTER_NAME),
-        true)) {
+    for (ORecordFlat rec : new ORecordIteratorCluster<ORecordFlat>(database, database, database.getClusterIdByName(CLUSTER_NAME))) {
       fields = rec.value().split("-");
 
       int i = Integer.parseInt(fields[0]);

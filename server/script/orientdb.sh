@@ -3,6 +3,10 @@
 #
 # Copyright (c) Orient Technologies LTD (http://www.orientechnologies.com)
 
+# chkconfig: 2345 20 80
+# description: OrientDb init script
+# processname: orientdb.sh
+
 # You have to SET the OrientDB installation directory here
 ORIENTDB_DIR="YOUR_ORIENTDB_INSTALLATION_PATH"
 ORIENTDB_USER="USER_YOU_WANT_ORIENTDB_RUN_WITH"
@@ -37,7 +41,7 @@ stop() {
 }
 
 status() {
-	PID=`ps -ef | grep 'orientdb.www.path' | grep java | grep -v grep | awk '{print $2}'`
+	PID=` ps auxw | grep 'orientdb.www.path' | grep java | grep -v grep | awk '{print $2}'`
 	if [ "x$PID" = "x" ]
 	then
 		PID=0

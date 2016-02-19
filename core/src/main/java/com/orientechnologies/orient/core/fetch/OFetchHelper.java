@@ -26,6 +26,7 @@ import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.db.record.ORecordLazyMultiValue;
 import com.orientechnologies.orient.core.db.record.ridbag.ORidBag;
 import com.orientechnologies.orient.core.id.ORID;
+import com.orientechnologies.orient.core.id.ORecordId;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.serialization.serializer.OStringSerializerHelper;
@@ -33,11 +34,14 @@ import com.orientechnologies.orient.core.type.tree.OMVRBTreeRIDSet;
 import com.orientechnologies.orient.core.type.tree.provider.OMVRBTreeRIDProvider;
 
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Helper class for fetching.
@@ -47,7 +51,16 @@ import java.util.Map;
  * @author Claudio Tesoriero (giastfader @ github)
  */
 public class OFetchHelper {
+  public static final String     DEFAULT           = "*:0";
+  public static final OFetchPlan DEFAULT_FETCHPLAN = new OFetchPlan(DEFAULT);
+
   public static OFetchPlan buildFetchPlan(final String iFetchPlan) {
+    if (iFetchPlan == null)
+      return null;
+
+    if (DEFAULT.equals(iFetchPlan))
+      return DEFAULT_FETCHPLAN;
+
     return new OFetchPlan(iFetchPlan);
   }
 
@@ -113,8 +126,10 @@ public class OFetchHelper {
 
   }
 
-  private static int getDepthLevel(final OFetchPlan iFetchPlan, final String iFieldPath) {
-    return iFetchPlan.getDepthLevel(iFieldPath);
+  private static int getDepthLevel(final OFetchPlan iFetchPlan, final String iFieldPath, final int iCurrentLevel) {
+    if (iFetchPlan == null)
+      return 0;
+    return iFetchPlan.getDepthLevel(iFieldPath, iCurrentLevel);
   }
 
   public static void processRecordRidMap(final ODocument record, final OFetchPlan iFetchPlan, final int iCurrentLevel,
@@ -123,24 +138,28 @@ public class OFetchHelper {
     if (iFetchPlan == null)
       return;
 
+    if (iFetchPlan == OFetchHelper.DEFAULT_FETCHPLAN)
+      return;
+
     Object fieldValue;
     for (String fieldName : record.fieldNames()) {
       int depthLevel;
       final String fieldPath = !iFieldPathFromRoot.isEmpty() ? iFieldPathFromRoot + "." + fieldName : fieldName;
 
-      depthLevel = getDepthLevel(iFetchPlan, fieldPath);
+      depthLevel = getDepthLevel(iFetchPlan, fieldPath, iCurrentLevel);
       if (depthLevel == -2)
         continue;
       if (iFieldDepthLevel > -1)
         depthLevel = iFieldDepthLevel;
 
-      fieldValue = record.field(fieldName);
+      fieldValue = record.rawField(fieldName);
       if (fieldValue == null
           || !(fieldValue instanceof OIdentifiable)
           && (!(fieldValue instanceof ORecordLazyMultiValue) || !((ORecordLazyMultiValue) fieldValue).rawIterator().hasNext() || !(((ORecordLazyMultiValue) fieldValue)
               .rawIterator().next() instanceof OIdentifiable))
           && (!(fieldValue instanceof Collection<?>) || ((Collection<?>) fieldValue).size() == 0 || !(((Collection<?>) fieldValue)
               .iterator().next() instanceof OIdentifiable))
+          && (!(fieldValue.getClass().isArray()) || Array.getLength(fieldValue) == 0 || !(Array.get(fieldValue, 0) instanceof OIdentifiable))
           && (!(fieldValue instanceof OMultiCollectionIterator<?>))
           && (!(fieldValue instanceof Map<?, ?>) || ((Map<?, ?>) fieldValue).size() == 0 || !(((Map<?, ?>) fieldValue).values()
               .iterator().next() instanceof OIdentifiable))) {
@@ -148,12 +167,16 @@ public class OFetchHelper {
       } else {
         try {
           final boolean isEmbedded = isEmbedded(fieldValue);
-          if (!(isEmbedded && iContext.fetchEmbeddedDocuments()) && !iFetchPlan.has(fieldPath) && depthLevel > -1
-              && iCurrentLevel >= depthLevel)
+          if (iFetchPlan == null
+              || (!(isEmbedded && iContext.fetchEmbeddedDocuments()) && !iFetchPlan.has(fieldPath, iCurrentLevel)
+                  && depthLevel > -1 && iCurrentLevel >= depthLevel))
             // MAX DEPTH REACHED: STOP TO FETCH THIS FIELD
             continue;
 
           final int nextLevel = isEmbedded ? iLevelFromRoot : iLevelFromRoot + 1;
+
+          if (fieldValue instanceof ORecordId)
+            fieldValue = ((ORecordId) fieldValue).getRecord();
 
           fetchRidMap(record, iFetchPlan, fieldValue, fieldName, iCurrentLevel, nextLevel, iFieldDepthLevel, parsedRecords,
               fieldPath, iContext);
@@ -197,11 +220,13 @@ public class OFetchHelper {
       final String iFieldPathFromRoot, final OFetchContext iContext) throws IOException {
     final Iterable<OIdentifiable> linked = (Iterable<OIdentifiable>) fieldValue;
     for (OIdentifiable d : linked) {
-      // GO RECURSIVELY
-      d = d.getRecord();
+      if (d != null) {
+        // GO RECURSIVELY
+        d = d.getRecord();
 
-      updateRidMap(iFetchPlan, (ODocument) d, iCurrentLevel, iLevelFromRoot, iFieldDepthLevel, parsedRecords, iFieldPathFromRoot,
-          iContext);
+        updateRidMap(iFetchPlan, (ODocument) d, iCurrentLevel, iLevelFromRoot, iFieldDepthLevel, parsedRecords, iFieldPathFromRoot,
+            iContext);
+      }
     }
   }
 
@@ -234,9 +259,9 @@ public class OFetchHelper {
     final Integer fetchedLevel = parsedRecords.get(fieldValue.getIdentity());
     int currentLevel = iCurrentLevel + 1;
     int fieldDepthLevel = iFieldDepthLevel;
-    if (iFetchPlan.has(iFieldPathFromRoot)) {
+    if (iFetchPlan != null && iFetchPlan.has(iFieldPathFromRoot, iCurrentLevel)) {
       currentLevel = 1;
-      fieldDepthLevel = iFetchPlan.getDepthLevel(iFieldPathFromRoot);
+      fieldDepthLevel = iFetchPlan.getDepthLevel(iFieldPathFromRoot, iCurrentLevel);
     }
 
     final boolean isEmbedded = isEmbedded(fieldValue);
@@ -261,21 +286,24 @@ public class OFetchHelper {
     Object fieldValue;
 
     iContext.onBeforeFetch(record);
+    Set<String> toRemove = new HashSet<String>();
 
     for (String fieldName : record.fieldNames()) {
       String fieldPath = !iFieldPathFromRoot.isEmpty() ? iFieldPathFromRoot + "." + fieldName : fieldName;
       int depthLevel;
-      depthLevel = getDepthLevel(iFetchPlan, fieldPath);
-      if (depthLevel == -2)
+      depthLevel = getDepthLevel(iFetchPlan, fieldPath, iCurrentLevel);
+      if (depthLevel == -2) {
+        toRemove.add(fieldName);
         continue;
+      }
       if (iFieldDepthLevel > -1)
         depthLevel = iFieldDepthLevel;
 
       fieldValue = record.rawField(fieldName);
 
       boolean fetch = !iFormat.contains("shallow")
-          && (!(fieldValue instanceof OIdentifiable) || depthLevel == -1 || iCurrentLevel <= depthLevel || iFetchPlan
-              .has(fieldPath));
+          && (!(fieldValue instanceof OIdentifiable) || depthLevel == -1 || iCurrentLevel <= depthLevel || (iFetchPlan != null && iFetchPlan
+              .has(fieldPath, iCurrentLevel)));
 
       final boolean isEmbedded = isEmbedded(fieldValue);
 
@@ -289,6 +317,7 @@ public class OFetchHelper {
           || !(fieldValue instanceof OIdentifiable)
           && (!(fieldValue instanceof ORecordLazyMultiValue) || !((ORecordLazyMultiValue) fieldValue).rawIterator().hasNext() || !(((ORecordLazyMultiValue) fieldValue)
               .rawIterator().next() instanceof OIdentifiable))
+          && (!(fieldValue.getClass().isArray()) || Array.getLength(fieldValue) == 0 || !(Array.get(fieldValue, 0) instanceof OIdentifiable))
           && (!(OMultiValue.getFirstValue(fieldValue) instanceof OIdentifiable
               || OMultiValue.getFirstValue(OMultiValue.getFirstValue(fieldValue)) instanceof OIdentifiable || OMultiValue
                 .getFirstValue(OMultiValue.getFirstValue(OMultiValue.getFirstValue(fieldValue))) instanceof OIdentifiable))) {
@@ -309,7 +338,9 @@ public class OFetchHelper {
         }
       }
     }
-
+    for (String fieldName : toRemove) {
+      iListener.skipStandardField(record, fieldName, iContext, iUserObject, iFormat);
+    }
     iContext.onAfterFetch(record);
   }
 
@@ -339,9 +370,9 @@ public class OFetchHelper {
 
     int currentLevel = iCurrentLevel + 1;
     int fieldDepthLevel = iFieldDepthLevel;
-    if (iFetchPlan.has(iFieldPathFromRoot)) {
+    if (iFetchPlan != null && iFetchPlan.has(iFieldPathFromRoot, iCurrentLevel)) {
       currentLevel = 0;
-      fieldDepthLevel = iFetchPlan.getDepthLevel(iFieldPathFromRoot);
+      fieldDepthLevel = iFetchPlan.getDepthLevel(iFieldPathFromRoot, iCurrentLevel);
     }
 
     if (fieldValue == null) {
@@ -450,6 +481,9 @@ public class OFetchHelper {
     else if (fieldValue instanceof Iterable<?> || fieldValue instanceof ORidBag) {
       linked = (Iterable<OIdentifiable>) fieldValue;
       iContext.onBeforeCollection(iRootRecord, fieldName, iUserObject, (Iterable) linked);
+    } else if (fieldValue.getClass().isArray()) {
+      linked = OMultiValue.getMultiValueIterable(fieldValue);
+      iContext.onBeforeCollection(iRootRecord, fieldName, iUserObject, (Iterable) linked);
     } else if (fieldValue instanceof Map<?, ?>) {
       linked = (Collection<?>) ((Map<?, ?>) fieldValue).values();
       iContext.onBeforeMap(iRootRecord, fieldName, iUserObject);
@@ -503,6 +537,8 @@ public class OFetchHelper {
     } finally {
       if (fieldValue instanceof Iterable<?> || fieldValue instanceof ORidBag)
         iContext.onAfterCollection(iRootRecord, fieldName, iUserObject);
+      else if (fieldValue.getClass().isArray())
+        iContext.onAfterCollection(iRootRecord, fieldName, iUserObject);
       else if (fieldValue instanceof Map<?, ?>)
         iContext.onAfterMap(iRootRecord, fieldName, iUserObject);
     }
@@ -512,17 +548,30 @@ public class OFetchHelper {
       final OIdentifiable fieldValue, final String fieldName, final int iCurrentLevel, final int iLevelFromRoot,
       final int iFieldDepthLevel, final Map<ORID, Integer> parsedRecords, final String iFieldPathFromRoot,
       final OFetchListener iListener, final OFetchContext iContext) throws IOException {
+    if (fieldValue instanceof ORID && !((ORID) fieldValue).isValid()) {
+      // RID NULL: TREAT AS "NULL" VALUE
+      iContext.onBeforeStandardField(fieldValue, fieldName, iRootRecord);
+      iListener.parseLinked(iRootRecord, fieldValue, iUserObject, fieldName, iContext);
+      iContext.onAfterStandardField(fieldValue, fieldName, iRootRecord);
+      return;
+    }
+
     final Integer fieldDepthLevel = parsedRecords.get(fieldValue.getIdentity());
     if (!fieldValue.getIdentity().isValid() || (fieldDepthLevel != null && fieldDepthLevel.intValue() == iLevelFromRoot)) {
       removeParsedFromMap(parsedRecords, fieldValue);
       final ODocument linked = (ODocument) fieldValue.getRecord();
+      if (linked == null)
+        return;
+
       iContext.onBeforeDocument(iRootRecord, linked, fieldName, iUserObject);
       Object userObject = iListener.fetchLinked(iRootRecord, iUserObject, fieldName, linked, iContext);
       processRecord(linked, userObject, iFetchPlan, iCurrentLevel, iLevelFromRoot, iFieldDepthLevel, parsedRecords,
           iFieldPathFromRoot, iListener, iContext, "");
       iContext.onAfterDocument(iRootRecord, linked, fieldName, iUserObject);
     } else {
+      iContext.onBeforeStandardField(fieldValue, fieldName, iRootRecord);
       iListener.parseLinked(iRootRecord, fieldValue, iUserObject, fieldName, iContext);
+      iContext.onAfterStandardField(fieldValue, fieldName, iRootRecord);
     }
   }
 

@@ -10,6 +10,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.orientechnologies.orient.core.config.OGlobalConfiguration;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
@@ -44,6 +45,8 @@ public class LocalPaginatedStorageCreateCrashRestore {
 
   public static final class RemoteDBRunner {
     public static void main(String[] args) throws Exception {
+      OGlobalConfiguration.WAL_FUZZY_CHECKPOINT_INTERVAL.setValue(5);
+
       OServer server = OServerMain.create();
       server.startup(RemoteDBRunner.class
           .getResourceAsStream("/com/orientechnologies/orient/core/storage/impl/local/paginated/db-create-config.xml"));
@@ -87,18 +90,24 @@ public class LocalPaginatedStorageCreateCrashRestore {
     private void saveDoc(ODocument document) {
       ODatabaseRecordThreadLocal.INSTANCE.set(baseDB);
 
+      baseDB.begin();
       ODocument testDoc = new ODocument();
       document.copyTo(testDoc);
       document.save();
+      baseDB.commit();
 
       ODatabaseRecordThreadLocal.INSTANCE.set(testDB);
+      testDB.begin();
       testDoc.save();
+      testDB.commit();
       ODatabaseRecordThreadLocal.INSTANCE.set(baseDB);
     }
   }
 
   @BeforeClass
   public void beforeClass() throws Exception {
+    OGlobalConfiguration.WAL_FUZZY_CHECKPOINT_INTERVAL.setValue(5);
+
     String buildDirectory = System.getProperty("buildDirectory", ".");
     buildDirectory += "/localPaginatedStorageCreateCrashRestore";
 
@@ -152,14 +161,13 @@ public class LocalPaginatedStorageCreateCrashRestore {
       futures.add(executorService.submit(new DataPropagationTask(baseDocumentTx, testDocumentTx)));
     }
 
-    Thread.sleep(150000);
+    Thread.sleep(300000);
 
     long lastTs = System.currentTimeMillis();
 
     System.out.println("Wait for process to destroy");
-    Process p = Runtime.getRuntime().exec("pkill -9 -f RemoteDBRunner");
-    p.waitFor();
 
+    // process.destroyForcibly();
     process.waitFor();
     System.out.println("Process was destroyed");
 

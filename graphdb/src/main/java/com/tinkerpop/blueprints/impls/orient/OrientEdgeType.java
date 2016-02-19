@@ -17,6 +17,7 @@
 package com.tinkerpop.blueprints.impls.orient;
 
 import com.orientechnologies.orient.core.metadata.schema.OClass;
+import com.orientechnologies.orient.core.metadata.schema.OImmutableClass;
 
 /**
  * Represents an Edge class.
@@ -24,28 +25,29 @@ import com.orientechnologies.orient.core.metadata.schema.OClass;
  * @author Luca Garulli (http://www.orientechnologies.com)
  */
 public class OrientEdgeType extends OrientElementType {
-  public static final String CLASS_NAME = "E";
+  // Keeping the name in Immutable class because i cannot do the other way around
+  public static final String CLASS_NAME = OImmutableClass.EDGE_CLASS_NAME;
 
-  public OrientEdgeType(final OClass delegate) {
-    super(delegate);
+  public OrientEdgeType(final OrientBaseGraph graph, final OClass delegate) {
+    super(graph, delegate);
   }
 
   public OrientEdgeType(final OrientBaseGraph graph) {
-    super(graph.getRawGraph().getMetadata().getSchema().getClass(CLASS_NAME));
+    super(graph, graph.getRawGraph().getMetadata().getSchema().getClass(CLASS_NAME));
   }
 
-  protected static final void checkType(final OClass iType) {
+  protected static void checkType(final OClass iType) {
     if (iType == null)
       throw new IllegalArgumentException("Edge class is null");
 
-    if (!iType.isSubClassOf(CLASS_NAME))
+    if (((iType instanceof OImmutableClass) && !((OImmutableClass) iType).isEdgeType()) || !iType.isSubClassOf(CLASS_NAME))
       throw new IllegalArgumentException("Type error. The class " + iType + " does not extend class '" + CLASS_NAME
           + "' and therefore cannot be considered an Edge");
   }
 
   @Override
   public OrientEdgeType getSuperClass() {
-    return new OrientEdgeType(super.getSuperClass());
+    return new OrientEdgeType(graph, super.getSuperClass());
   }
 
   @Override

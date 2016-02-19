@@ -19,9 +19,6 @@
  */
 package com.orientechnologies.orient.core.sql;
 
-import java.util.*;
-import java.util.Map.Entry;
-
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
@@ -33,10 +30,21 @@ import com.orientechnologies.orient.core.db.record.ORecordLazyMap;
 import com.orientechnologies.orient.core.db.record.ORecordLazyMultiValue;
 import com.orientechnologies.orient.core.exception.OCommandExecutionException;
 import com.orientechnologies.orient.core.id.ORID;
+import com.orientechnologies.orient.core.metadata.OMetadataInternal;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.record.ORecord;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.serialization.serializer.OStringSerializerHelper;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
 
 /**
  * Helper class to find reference in records.
@@ -100,7 +108,7 @@ public class OFindReferenceHelper {
 
   private static void browseClass(final ODatabaseDocument db, Set<ORID> iSourceRIDs, final Map<ORID, Set<ORID>> map,
       final String iClassName) {
-    final OClass clazz = db.getMetadata().getImmutableSchemaSnapshot().getClass(iClassName);
+    final OClass clazz = ((OMetadataInternal)db.getMetadata()).getImmutableSchemaSnapshot().getClass(iClassName);
 
     if (clazz == null)
       throw new OCommandExecutionException("Class '" + iClassName + "' was not found");
@@ -158,7 +166,15 @@ public class OFindReferenceHelper {
 
   private static void checkRecord(final Set<ORID> iSourceRIDs, final Map<ORID, Set<ORID>> map, final OIdentifiable value,
       final ORecord iRootObject) {
-    if (iSourceRIDs.contains(value.getIdentity()))
+    if (iSourceRIDs.contains(value.getIdentity())) {
       map.get(value.getIdentity()).add(iRootObject.getIdentity());
+    }else if(!value.getIdentity().isValid() && value.getRecord() instanceof ODocument){
+      //embedded document
+      ODocument doc = value.getRecord();
+      for (String fieldName : doc.fieldNames()) {
+        Object fieldValue = doc.field(fieldName);
+        checkObject(iSourceRIDs, map, fieldValue, iRootObject);
+      }
+    }
   }
 }

@@ -19,25 +19,18 @@
  */
 package com.orientechnologies.orient.server.distributed;
 
-import com.orientechnologies.common.collection.OMultiValue;
-import com.orientechnologies.orient.core.Orient;
-import com.orientechnologies.orient.server.distributed.ODistributedServerLog.DIRECTION;
-import com.orientechnologies.orient.server.distributed.task.OAbstractRemoteTask;
-import com.orientechnologies.orient.server.distributed.task.OAbstractReplicatedTask;
-
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+
+import com.orientechnologies.common.collection.OMultiValue;
+import com.orientechnologies.orient.core.Orient;
+import com.orientechnologies.orient.core.command.OCommandDistributedReplicateRequest;
+import com.orientechnologies.orient.server.distributed.ODistributedServerLog.DIRECTION;
+import com.orientechnologies.orient.server.distributed.task.OAbstractRemoteTask;
+import com.orientechnologies.orient.server.distributed.task.OAbstractReplicatedTask;
 
 /**
  * Asynchronous response manager
@@ -46,23 +39,25 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  */
 public class ODistributedResponseManager {
-  private static final String                    NO_RESPONSE                 = "waiting-for-response";
+  public static final int                        ADDITIONAL_TIMEOUT_CLUSTER_SHAPE = 10000;
+  private static final String                    NO_RESPONSE                      = "waiting-for-response";
   private final ODistributedServerManager        dManager;
   private final ODistributedRequest              request;
   private final long                             sentOn;
-  private final HashMap<String, Object>          responses                   = new HashMap<String, Object>();
+  private final HashMap<String, Object>          responses                        = new HashMap<String, Object>();
   private final boolean                          groupResponsesByResult;
-  private final List<List<ODistributedResponse>> responseGroups              = new ArrayList<List<ODistributedResponse>>();
+  private final List<List<ODistributedResponse>> responseGroups                   = new ArrayList<List<ODistributedResponse>>();
   private final int                              expectedSynchronousResponses;
   private final long                             synchTimeout;
   private final long                             totalTimeout;
-  private final Lock                             synchronousResponsesLock    = new ReentrantLock();
-  private final Condition                        synchronousResponsesArrived = synchronousResponsesLock.newCondition();
+  private final Lock                             synchronousResponsesLock         = new ReentrantLock();
+  private final Condition                        synchronousResponsesArrived      = synchronousResponsesLock.newCondition();
   private final int                              quorum;
   private final boolean                          waitForLocalNode;
-  private volatile int                           receivedResponses           = 0;
+  private volatile int                           receivedResponses                = 0;
+  private volatile int                           discardedResponses               = 0;
   private volatile boolean                       receivedCurrentNode;
-  private Object                                 responseLock                = new Object();
+  private Object                                 responseLock                     = new Object();
 
   public ODistributedResponseManager(final ODistributedServerManager iManager, final ODistributedRequest iRequest,
       final Collection<String> expectedResponses, final int iExpectedSynchronousResponses, final int iQuorum,
@@ -99,20 +94,17 @@ public class ODistributedResponseManager {
         ODistributedServerLog.warn(this, response.getSenderNodeName(), executorNode, DIRECTION.IN,
             "received response for request (%s) from unexpected node. Expected are: %s", request, getExpectedNodes());
 
-        Orient.instance().getProfiler()
-            .updateCounter("distributed.node.unexpectedNodeResponse", "Number of responses from unexpected nodes", +1);
+        Orient.instance().getProfiler().updateCounter("distributed.node.unexpectedNodeResponse",
+            "Number of responses from unexpected nodes", +1);
 
         return false;
       }
 
-      Orient.instance().getProfiler()
-          .stopChrono("distributed.node.latency", "Latency of distributed messages", sentOn, "distributed.node.latency");
+      Orient.instance().getProfiler().stopChrono("distributed.node.latency", "Latency of distributed messages", sentOn,
+          "distributed.node.latency");
 
-      Orient
-          .instance()
-          .getProfiler()
-          .stopChrono("distributed.node." + executorNode + ".latency", "Latency of distributed messages per node", sentOn,
-              "distributed.node.*.latency");
+      Orient.instance().getProfiler().stopChrono("distributed.node." + executorNode + ".latency",
+          "Latency of distributed messages per node", sentOn, "distributed.node.*.latency");
 
       boolean completed = false;
       responses.put(executorNode, response);
@@ -122,17 +114,14 @@ public class ODistributedResponseManager {
         receivedCurrentNode = true;
 
       if (ODistributedServerLog.isDebugEnabled())
-        ODistributedServerLog
-            .debug(
-                this,
-                response.getSenderNodeName(),
-                executorNode,
-                DIRECTION.IN,
-                "received response '%s' for request (%s) (receivedCurrentNode=%s receivedResponses=%d expectedSynchronousResponses=%d quorum=%d)",
-                response, request, receivedCurrentNode, receivedResponses, expectedSynchronousResponses, quorum);
+        ODistributedServerLog.debug(this, response.getSenderNodeName(), executorNode, DIRECTION.IN,
+            "received response '%s' for request (%s) (receivedCurrentNode=%s receivedResponses=%d expectedSynchronousResponses=%d quorum=%d)",
+            response, request, receivedCurrentNode, receivedResponses, expectedSynchronousResponses, quorum);
 
-      // PUT THE RESPONSE IN THE RIGHT RESPONSE GROUP
-      if (groupResponsesByResult) {
+      if (response.getPayload() instanceof ODiscardedResponse)
+        discardedResponses++;
+      else if (groupResponsesByResult) {
+        // PUT THE RESPONSE IN THE RIGHT RESPONSE GROUP
         // TODO: AVOID TO KEEP ALL THE RESULT FOR THE SAME RESP GROUP, BUT RATHER THE FIRST ONE + COUNTER
         boolean foundBucket = false;
         for (int i = 0; i < responseGroups.size(); ++i) {
@@ -176,11 +165,9 @@ public class ODistributedResponseManager {
 
       completed = getExpectedResponses() == receivedResponses;
 
-      if (receivedResponses >= expectedSynchronousResponses && (!waitForLocalNode || receivedCurrentNode)) {
-        if (completed || isMinimumQuorumReached(false)) {
-          // NOTIFY TO THE WAITER THE RESPONSE IS COMPLETE NOW
-          notifyWaiters();
-        }
+      if (completed || isMinimumQuorumReached(false)) {
+        // NOTIFY TO THE WAITER THE RESPONSE IS COMPLETE NOW
+        notifyWaiters();
       }
       return completed;
     }
@@ -249,58 +236,82 @@ public class ODistributedResponseManager {
     try {
 
       long currentTimeout = synchTimeout;
-      while (currentTimeout > 0 && ((waitForLocalNode && !receivedCurrentNode) || receivedResponses < expectedSynchronousResponses)) {
+      while (currentTimeout > 0 && !isMinimumQuorumReached(false) && receivedResponses < expectedSynchronousResponses) {
+
         // WAIT FOR THE RESPONSES
         synchronousResponsesArrived.await(currentTimeout, TimeUnit.MILLISECONDS);
 
-        if ((!waitForLocalNode || receivedCurrentNode) && (receivedResponses >= expectedSynchronousResponses))
+        if (isMinimumQuorumReached(false) || receivedResponses >= expectedSynchronousResponses)
           // OK
+          return true;
+
+        if (Thread.currentThread().isInterrupted()) {
+          // INTERRUPTED
+          ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
+              "thread has been interrupted wait for request (%s)", request);
+          Thread.currentThread().interrupt();
           break;
+        }
 
         final long now = System.currentTimeMillis();
         final long elapsed = now - beginTime;
         currentTimeout = synchTimeout - elapsed;
 
-        final long lastClusterChange = dManager.getLastClusterChangeOn();
-        if (lastClusterChange > 0 && now - lastClusterChange < (synchTimeout * 2)) {
-          // CHECK IF ANY NODE ARE UNREACHABLE IN THE MEANWHILE
-          int missingActiveNodes = 0;
+        // CHECK IF ANY NODE ARE UNREACHABLE IN THE MEANWHILE
+        int synchronizingNodes = 0;
+        int missingActiveNodes = 0;
 
-          synchronized (responseLock) {
-            for (Iterator<Map.Entry<String, Object>> iter = responses.entrySet().iterator(); iter.hasNext();) {
-              final Map.Entry<String, Object> curr = iter.next();
-              if (curr.getValue() == NO_RESPONSE)
-                // ANALYZE THE NODE WITHOUT A RESPONSE
-                if (dManager.isNodeAvailable(curr.getKey(), getDatabaseName()))
-                  missingActiveNodes++;
+        synchronized (responseLock) {
+          for (Iterator<Map.Entry<String, Object>> iter = responses.entrySet().iterator(); iter.hasNext();) {
+            final Map.Entry<String, Object> curr = iter.next();
+
+            if (curr.getValue() == NO_RESPONSE) {
+              // ANALYZE THE NODE WITHOUT A RESPONSE
+              final ODistributedServerManager.DB_STATUS dbStatus = dManager.getDatabaseStatus(curr.getKey(), getDatabaseName());
+              switch (dbStatus) {
+              case SYNCHRONIZING:
+                synchronizingNodes++;
+                missingActiveNodes++;
+                break;
+              case ONLINE:
+                missingActiveNodes++;
+                break;
+              }
             }
           }
+        }
 
-          if (missingActiveNodes == 0) {
-            // NO MORE ACTIVE NODES TO WAIT
-            ODistributedServerLog.info(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
-                "no more active nodes to wait for request (%s): anticipate timeout (saved %d ms)", request, currentTimeout);
-            break;
-          }
+        if (missingActiveNodes == 0) {
+          // NO MORE ACTIVE NODES TO WAIT
+          ODistributedServerLog.debug(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
+              "no more active nodes to wait for request (%s): anticipate timeout (saved %d ms)", request, currentTimeout);
+          break;
+        }
 
-          // NEW NODE DURING WAIT: ENLARGE TIMEOUT
-          currentTimeout += synchTimeout;
-          ODistributedServerLog.info(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
+        final long lastClusterChange = dManager.getLastClusterChangeOn();
+        if (lastClusterChange > 0 && now - lastClusterChange < (synchTimeout + ADDITIONAL_TIMEOUT_CLUSTER_SHAPE)) {
+          // CHANGED CLUSTER SHAPE DURING WAIT: ENLARGE TIMEOUT
+          currentTimeout = synchTimeout;
+          ODistributedServerLog.debug(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
               "cluster shape changed during request (%s): enlarge timeout +%dms, wait again for %dms", request, synchTimeout,
               currentTimeout);
+          continue;
+        } else if (synchronizingNodes > 0) {
+          // SOME NODE IS SYNCHRONIZING: WAIT FOR THEM
+          currentTimeout = synchTimeout;
+          ODistributedServerLog.debug(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
+              "%d nodes are in synchronization mode during request (%s): enlarge timeout +%dms, wait again for %dms",
+              synchronizingNodes, request, synchTimeout, currentTimeout);
         }
       }
 
-      return receivedResponses >= expectedSynchronousResponses;
+      return isMinimumQuorumReached(false) || receivedResponses >= expectedSynchronousResponses;
 
     } finally {
       synchronousResponsesLock.unlock();
 
-      Orient
-          .instance()
-          .getProfiler()
-          .stopChrono("distributed.synchResponses", "Time to collect all the synchronous responses from distributed nodes",
-              beginTime);
+      Orient.instance().getProfiler().stopChrono("distributed.synchResponses",
+          "Time to collect all the synchronous responses from distributed nodes", beginTime);
     }
   }
 
@@ -348,6 +359,10 @@ public class ODistributedResponseManager {
 
   public String getDatabaseName() {
     return request.getDatabaseName();
+  }
+
+  public long getSynchTimeout() {
+    return synchTimeout;
   }
 
   public void timeout() {
@@ -441,8 +456,6 @@ public class ODistributedResponseManager {
 
   protected boolean isMinimumQuorumReached(final boolean iCheckAvailableNodes) {
     if (isWaitForLocalNode() && !isReceivedCurrentNode()) {
-      ODistributedServerLog.warn(this, dManager.getLocalNodeName(), dManager.getLocalNodeName(), DIRECTION.IN,
-          "no response received from local node about request %s", request);
       return false;
     }
 
@@ -453,23 +466,23 @@ public class ODistributedResponseManager {
       return receivedResponses >= quorum;
 
     for (List<ODistributedResponse> group : responseGroups)
-      if (group.size() >= quorum)
+      if (group.size() + discardedResponses >= quorum)
         return true;
 
-    if (getReceivedResponsesCount() < quorum && iCheckAvailableNodes) {
+    if (receivedResponses < quorum && iCheckAvailableNodes) {
       final ODistributedConfiguration dbConfig = dManager.getDatabaseConfiguration(getDatabaseName());
       if (!dbConfig.getFailureAvailableNodesLessQuorum("*")) {
         // CHECK IF ANY NODE IS OFFLINE
-        int availableNodes = 0;
+        int onlineNodes = 0;
         for (Map.Entry<String, Object> r : responses.entrySet()) {
-          if (dManager.isNodeAvailable(r.getKey(), getDatabaseName()))
-            availableNodes++;
+          if (dManager.isNodeOnline(r.getKey(), getDatabaseName()))
+            onlineNodes++;
         }
 
-        if (availableNodes < quorum) {
+        if (onlineNodes < quorum) {
           ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
               "overridden quorum (%d) for request (%s) because available nodes (%d) are less than quorum, received responses: %s",
-              quorum, request, availableNodes, responses);
+              quorum, request, onlineNodes, responses);
           return true;
         }
       }
@@ -490,7 +503,7 @@ public class ODistributedResponseManager {
   }
 
   protected void manageConflicts() {
-    if (!groupResponsesByResult || request.getTask().getQuorumType() == OAbstractRemoteTask.QUORUM_TYPE.NONE)
+    if (!groupResponsesByResult || request.getTask().getQuorumType() == OCommandDistributedReplicateRequest.QUORUM_TYPE.NONE)
       // NO QUORUM
       return;
 
@@ -502,7 +515,7 @@ public class ODistributedResponseManager {
     final List<ODistributedResponse> bestResponsesGroup = responseGroups.get(bestResponsesGroupIndex);
 
     final int maxCoherentResponses = bestResponsesGroup.size();
-    final int conflicts = getExpectedResponses() - maxCoherentResponses;
+    final int conflicts = getExpectedResponses() - (maxCoherentResponses + discardedResponses);
 
     if (isMinimumQuorumReached(true)) {
       // QUORUM SATISFIED
@@ -514,28 +527,16 @@ public class ODistributedResponseManager {
       if (checkNoWinnerCase(bestResponsesGroup))
         return;
 
-      // NO FIFTY/FIFTY CASE: FIX THE CONFLICTED NODES BY OVERWRITING THE RECORD WITH THE WINNER'S RESULT
-      ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
-          "detected %d conflicts, but the quorum (%d) has been reached. Fixing remote records. Request (%s)", conflicts, quorum,
-          request);
-
-      fixNodesInConflict(bestResponsesGroup);
+      fixNodesInConflict(bestResponsesGroup, conflicts);
 
     } else {
       // QUORUM HASN'T BEEN REACHED
-      ODistributedServerLog
-          .warn(
-              this,
-              dManager.getLocalNodeName(),
-              null,
-              DIRECTION.NONE,
-              "detected %d node(s) in timeout or in conflict and quorum (%d) has not been reached, rolling back changes for request (%s)",
-              conflicts, quorum, request);
-
-      undoRequest();
+      ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
+          "detected %d node(s) in timeout or in conflict and quorum (%d) has not been reached, rolling back changes for request (%s)",
+          conflicts, quorum, request);
 
       final StringBuilder msg = new StringBuilder(256);
-      msg.append("Quorum " + getQuorum() + " not reached for request (" + request + "). Timeout="
+      msg.append("Quorum " + getQuorum() + " not reached for request (" + request + "). Elapsed="
           + (System.currentTimeMillis() - sentOn) + "ms");
       final List<ODistributedResponse> res = getConflictResponses();
       if (res.isEmpty())
@@ -554,42 +555,55 @@ public class ODistributedResponseManager {
       msg.append("Received: ");
       msg.append(responses);
 
+      ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE, msg.toString());
+
+      undoRequest();
+
       throw new ODistributedException(msg.toString());
     }
   }
 
   protected void undoRequest() {
+    // DETERMINE IF ANY CREATE FAILED TO RESTORE RIDS
     for (ODistributedResponse r : getReceivedResponses()) {
-      ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
-          "sending undo message for request (%s) to server %s", request, r.getExecutorNodeName());
-
       final OAbstractRemoteTask task = request.getTask();
       if (task instanceof OAbstractReplicatedTask) {
         final OAbstractRemoteTask undoTask = ((OAbstractReplicatedTask) task).getUndoTask(request, r.getPayload());
 
-        if (undoTask != null)
+        if (undoTask != null) {
+          ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
+              "sending undo message (%s) for request (%s) to server %s", undoTask, request, r.getExecutorNodeName());
+
           dManager.sendRequest(request.getDatabaseName(), null, Collections.singleton(r.getExecutorNodeName()), undoTask,
               ODistributedRequest.EXECUTION_MODE.NO_RESPONSE);
+        }
       }
     }
   }
 
-  protected void fixNodesInConflict(final List<ODistributedResponse> bestResponsesGroup) {
+  protected void fixNodesInConflict(final List<ODistributedResponse> bestResponsesGroup, final int conflicts) {
+    // NO FIFTY/FIFTY CASE: FIX THE CONFLICTED NODES BY OVERWRITING THE RECORD WITH THE WINNER'S RESULT
+    ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
+        "detected %d conflicts, but the quorum (%d) has been reached. Fixing remote records. Request (%s)", conflicts, quorum,
+        request);
+
     final ODistributedResponse goodResponse = bestResponsesGroup.get(0);
 
     for (List<ODistributedResponse> responseGroup : responseGroups) {
       if (responseGroup != bestResponsesGroup) {
         // CONFLICT GROUP: FIX THEM ONE BY ONE
         for (ODistributedResponse r : responseGroup) {
-          ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
-              "fixing response for request (%s) in server %s to be: %s", request, r.getExecutorNodeName(), goodResponse);
+          final OAbstractRemoteTask fixTask = ((OAbstractReplicatedTask) request.getTask()).getFixTask(request, request.getTask(),
+              r.getPayload(), goodResponse.getPayload());
 
-          final OAbstractRemoteTask fixTask = ((OAbstractReplicatedTask) request.getTask()).getFixTask(request, r.getPayload(),
-              goodResponse.getPayload());
+          if (fixTask != null) {
+            ODistributedServerLog.warn(this, dManager.getLocalNodeName(), null, DIRECTION.OUT,
+                "sending fix message (%s) for response (%s) on request (%s) in server %s to be: %s", fixTask, r, request,
+                r.getExecutorNodeName(), goodResponse);
 
-          if (fixTask != null)
             dManager.sendRequest(request.getDatabaseName(), null, Collections.singleton(r.getExecutorNodeName()), fixTask,
                 ODistributedRequest.EXECUTION_MODE.NO_RESPONSE);
+          }
         }
       }
     }
@@ -605,21 +619,26 @@ public class ODistributedResponseManager {
     for (List<ODistributedResponse> responseGroup : responseGroups) {
       if (responseGroup != bestResponsesGroup && responseGroup.size() == maxCoherentResponses) {
         final List<String> a = new ArrayList<String>();
-        for (ODistributedResponse r : bestResponsesGroup)
+        Object aResponse = null;
+        for (ODistributedResponse r : bestResponsesGroup) {
           a.add(r.getExecutorNodeName());
+          aResponse = r.getPayload();
+        }
 
         final List<String> b = new ArrayList<String>();
-        for (ODistributedResponse r : responseGroup)
+        Object bResponse = null;
+        for (ODistributedResponse r : responseGroup) {
           b.add(r.getExecutorNodeName());
+          bResponse = r.getPayload();
+        }
 
-        ODistributedServerLog
-            .error(
-                this,
-                dManager.getLocalNodeName(),
-                null,
-                DIRECTION.NONE,
-                "detected possible split brain network where 2 groups of servers A%s and B%s have different contents. Cannot decide who is the winner even if the quorum (%d) has been reached. Request (%s)",
-                a, b, quorum, request);
+        final StringBuilder details = new StringBuilder();
+        details.append(" A=").append(aResponse);
+        details.append(", B=").append(bResponse);
+
+        ODistributedServerLog.error(this, dManager.getLocalNodeName(), null, DIRECTION.NONE,
+            "detected possible split brain network where 2 groups of servers A%s and B%s have different contents. Cannot decide who is the winner even if the quorum (%d) has been reached. Request (%s) responses:%s",
+            a, b, quorum, request, details);
 
         // DON'T FIX RECORDS BECAUSE THERE ISN'T A CLEAR WINNER
         return true;

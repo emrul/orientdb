@@ -27,7 +27,7 @@ import com.orientechnologies.orient.core.storage.OStorage;
 import java.io.IOException;
 
 /**
- * @author Andrey Lomakin <a href="mailto:lomakin.andrey@gmail.com">Andrey Lomakin</a>
+ * @author Andrey Lomakin (a.lomakin-at-orientechnologies.com)
  * @since 7/15/14
  */
 public class OStorageMemoryConfiguration extends OStorageConfiguration {
@@ -48,7 +48,7 @@ public class OStorageMemoryConfiguration extends OStorageConfiguration {
     try {
       fromStream(serializedContent);
     } catch (Exception e) {
-      throw new OSerializationException("Cannot load database's configuration. The database seems to be corrupted.", e);
+      throw new OSerializationException("Cannot load database's configuration. The database seems corrupted", e);
     }
     return this;
   }

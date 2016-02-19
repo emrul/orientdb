@@ -38,7 +38,7 @@ import com.orientechnologies.orient.core.storage.fs.OFile;
  * Implementation of standard version. This implementation contains only one integer number to hold state of version.
  * 
  * @see OVersionFactory
- * @author <a href="mailto:enisher@gmail.com">Artem Orobets</a>
+ * @author Artem Orobets (enisher-at-gmail.com)
  */
 public final class OSimpleVersion implements ORecordVersion {
   public static final OBinaryConverter CONVERTER = OBinaryConverterFactory.getConverter();
@@ -54,7 +54,7 @@ public final class OSimpleVersion implements ORecordVersion {
   @Override
   public void increment() {
     if (isTombstone())
-      throw new IllegalStateException("Record was deleted and can not be updated.");
+      throw new IllegalStateException("Record was deleted and cannot be updated.");
 
     version++;
   }
@@ -62,7 +62,7 @@ public final class OSimpleVersion implements ORecordVersion {
   @Override
   public void decrement() {
     if (isTombstone())
-      throw new IllegalStateException("Record was deleted and can not be updated.");
+      throw new IllegalStateException("Record was deleted and cannot be updated.");
 
     version--;
   }
@@ -90,7 +90,7 @@ public final class OSimpleVersion implements ORecordVersion {
   @Override
   public void convertToTombstone() {
     if (isTombstone())
-      throw new IllegalStateException("Record was deleted and can not be updated.");
+      throw new IllegalStateException("Record was deleted and cannot be updated.");
 
     version++;
     version = -version;

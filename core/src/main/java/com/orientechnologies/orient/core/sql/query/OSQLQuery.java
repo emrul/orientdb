@@ -22,6 +22,7 @@ package com.orientechnologies.orient.core.sql.query;
 import java.util.*;
 import java.util.Map.Entry;
 
+import com.orientechnologies.common.util.OCommonConst;
 import com.orientechnologies.orient.core.command.OCommandRequestText;
 import com.orientechnologies.orient.core.db.ODatabaseDocumentInternal;
 import com.orientechnologies.orient.core.db.ODatabaseRecordThreadLocal;
@@ -29,6 +30,7 @@ import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.exception.OQueryParsingException;
 import com.orientechnologies.orient.core.exception.OSerializationException;
 import com.orientechnologies.orient.core.id.ORID;
+import com.orientechnologies.orient.core.metadata.OMetadataInternal;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.query.OQueryAbstract;
 import com.orientechnologies.orient.core.record.ORecord;
@@ -64,13 +66,13 @@ public abstract class OSQLQuery<T> extends OQueryAbstract<T> implements OCommand
     if (database == null)
       throw new OQueryParsingException("No database configured");
 
-    database.getMetadata().makeThreadLocalSchemaSnapshot();
+    ((OMetadataInternal) database.getMetadata()).makeThreadLocalSchemaSnapshot();
     try {
       setParameters(iArgs);
       return (List<T>) database.getStorage().command(this);
 
     } finally {
-      database.getMetadata().clearThreadLocalSchemaSnapshot();
+      ((OMetadataInternal) database.getMetadata()).clearThreadLocalSchemaSnapshot();
     }
   }
 
@@ -154,7 +156,7 @@ public abstract class OSQLQuery<T> extends OQueryAbstract<T> implements OCommand
   protected byte[] serializeQueryParameters(final Map<Object, Object> params) {
     if (params == null || params.size() == 0)
       // NO PARAMETER, JUST SEND 0
-      return new byte[0];
+      return OCommonConst.EMPTY_BYTE_ARRAY;
 
     final ODocument param = new ODocument();
     param.field("params", convertToRIDsIfPossible(params));
@@ -168,7 +170,7 @@ public abstract class OSQLQuery<T> extends OQueryAbstract<T> implements OCommand
     for (Entry<Object, Object> entry : params.entrySet()) {
       final Object value = entry.getValue();
 
-      if (value instanceof Set<?> && ((Set<?>) value).iterator().next() instanceof ORecord) {
+      if (value instanceof Set<?> && !((Set<?>) value).isEmpty() && ((Set<?>) value).iterator().next() instanceof ORecord) {
         // CONVERT RECORDS AS RIDS
         final Set<ORID> newSet = new HashSet<ORID>();
         for (ORecord rec : (Set<ORecord>) value) {
@@ -176,7 +178,7 @@ public abstract class OSQLQuery<T> extends OQueryAbstract<T> implements OCommand
         }
         newParams.put(entry.getKey(), newSet);
 
-      } else if (value instanceof List<?> && ((List<?>) value).get(0) instanceof ORecord) {
+      } else if (value instanceof List<?> && !((List<?>) value).isEmpty() && ((List<?>) value).get(0) instanceof ORecord) {
         // CONVERT RECORDS AS RIDS
         final List<ORID> newList = new ArrayList<ORID>();
         for (ORecord rec : (List<ORecord>) value) {
@@ -184,17 +186,18 @@ public abstract class OSQLQuery<T> extends OQueryAbstract<T> implements OCommand
         }
         newParams.put(entry.getKey(), newList);
 
-      } else if (value instanceof Map<?, ?> && ((Map<?, ?>) value).values().iterator().next() instanceof ORecord) {
+      } else if (value instanceof Map<?, ?> && !((Map<?, ?>) value).isEmpty()
+          && ((Map<?, ?>) value).values().iterator().next() instanceof ORecord) {
         // CONVERT RECORDS AS RIDS
         final Map<Object, ORID> newMap = new HashMap<Object, ORID>();
         for (Entry<?, ORecord> mapEntry : ((Map<?, ORecord>) value).entrySet()) {
           newMap.put(mapEntry.getKey(), mapEntry.getValue().getIdentity());
         }
         newParams.put(entry.getKey(), newMap);
-      } else if (entry.getValue() instanceof ORecord) {
-        newParams.put(entry.getKey(), ((OIdentifiable) entry.getValue()).getIdentity());
+      } else if (value instanceof OIdentifiable) {
+        newParams.put(entry.getKey(), ((OIdentifiable) value).getIdentity());
       } else
-        newParams.put(entry.getKey(), entry.getValue());
+        newParams.put(entry.getKey(), value);
     }
 
     return newParams;

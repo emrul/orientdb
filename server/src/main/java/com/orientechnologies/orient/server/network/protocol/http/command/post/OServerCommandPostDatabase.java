@@ -22,7 +22,6 @@ package com.orientechnologies.orient.server.network.protocol.http.command.post;
 import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.config.OStorageEntryConfiguration;
-import com.orientechnologies.orient.core.db.OPartitionedDatabasePool;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.engine.local.OEngineLocalPaginated;
 import com.orientechnologies.orient.core.engine.memory.OEngineMemory;
@@ -34,7 +33,6 @@ import com.orientechnologies.orient.core.index.OIndexDefinition;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OProperty;
 import com.orientechnologies.orient.core.metadata.security.ORole;
-import com.orientechnologies.orient.core.metadata.security.ORule;
 import com.orientechnologies.orient.core.metadata.security.OUser;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.serialization.serializer.OJSONWriter;
@@ -49,7 +47,7 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.util.Arrays;
 import java.util.HashSet;
-import java.util.Map.Entry;
+import java.util.Map;
 import java.util.Set;
 
 public class OServerCommandPostDatabase extends OServerCommandAuthenticatedServerAbstract {
@@ -71,18 +69,19 @@ public class OServerCommandPostDatabase extends OServerCommandAuthenticatedServe
       String url = getStoragePath(databaseName, storageMode);
       final String type = urlParts.length > 3 ? urlParts[3] : "document";
       if (url != null) {
-
         final ODatabaseDocumentTx database = Orient.instance().getDatabaseFactory().createDatabase(type, url);
-        if (database.exists())
-          throw new ODatabaseException("Database '" + database.getURL() + "' already exists");
-
-        for (OStorage stg : Orient.instance().getStorages()) {
-          if (stg.getName().equalsIgnoreCase(database.getName()) && stg.exists())
-            throw new ODatabaseException("Database named '" + database.getName() + "' already exists: " + stg);
+        if (database.exists()) {
+          iResponse.send(OHttpUtils.STATUS_CONFLICT_CODE, OHttpUtils.STATUS_CONFLICT_DESCRIPTION,
+                  OHttpUtils.CONTENT_TEXT_PLAIN, "Database '" + database.getURL() + "' already exists.", null);
+        } else {
+          for (OStorage stg : Orient.instance().getStorages()) {
+            if (stg.getName().equalsIgnoreCase(database.getName()) && stg.exists())
+              throw new ODatabaseException("Database named '" + database.getName() + "' already exists: " + stg);
+          }
+          OLogManager.instance().info(this, "Creating database " + url);
+          database.create();
+          sendDatabaseInfo(iRequest, iResponse, database);
         }
-        OLogManager.instance().info(this, "Creating database " + url);
-        database.create();
-        sendDatabaseInfo(iRequest, iResponse, database);
       } else {
         throw new OCommandExecutionException("The '" + storageMode + "' storage mode does not exists.");
       }
@@ -91,16 +90,18 @@ public class OServerCommandPostDatabase extends OServerCommandAuthenticatedServe
     return false;
   }
 
-  protected String getStoragePath(final String databaseName, final String storageMode) {
-    final String path;
-    if (storageMode.equals(OEngineLocalPaginated.NAME)) {
-      path = storageMode + ":${" + Orient.ORIENTDB_HOME + "}/databases/" + databaseName;
-    } else if (storageMode.equals(OEngineMemory.NAME)) {
-      path = storageMode + ":" + databaseName;
-    } else {
-      return null;
-    }
-    return path;
+  @Override
+  public String[] getNames() {
+    return NAMES;
+  }
+
+  protected String getStoragePath(final String databaseName, final String iStorageMode) {
+    if (iStorageMode.equals(OEngineLocalPaginated.NAME))
+      return iStorageMode + ":" + server.getDatabaseDirectory() + databaseName;
+    else if (iStorageMode.equals(OEngineMemory.NAME))
+      return iStorageMode + ":" + databaseName;
+
+    return null;
   }
 
   protected void sendDatabaseInfo(final OHttpRequest iRequest, final OHttpResponse iResponse, final ODatabaseDocumentTx db)
@@ -169,25 +170,14 @@ public class OServerCommandPostDatabase extends OServerCommandAuthenticatedServe
       json.writeAttribute(3, false, "mode", role.getMode().toString());
 
       json.beginCollection(3, true, "rules");
-      for (ORule rule : role.getRules()) {
-        if (rule.getAccess() != null) {
-          json.beginObject(4);
-          json.writeAttribute(4, true, "name", rule.getResourceGeneric());
-          json.writeAttribute(4, false, "create", role.allow(rule.getResourceGeneric(), null, ORole.PERMISSION_CREATE));
-          json.writeAttribute(4, false, "read", role.allow(rule.getResourceGeneric(), null, ORole.PERMISSION_READ));
-          json.writeAttribute(4, false, "update", role.allow(rule.getResourceGeneric(), null, ORole.PERMISSION_UPDATE));
-          json.writeAttribute(4, false, "delete", role.allow(rule.getResourceGeneric(), null, ORole.PERMISSION_DELETE));
-          json.endObject(4, true);
-        }
-        for (String specificResource : rule.getSpecificResources().keySet()) {
-          json.beginObject(4);
-          json.writeAttribute(4, true, "name", rule.getResourceGeneric() + "." + specificResource);
-          json.writeAttribute(4, false, "create", role.allow(rule.getResourceGeneric(), specificResource, ORole.PERMISSION_CREATE));
-          json.writeAttribute(4, false, "read", role.allow(rule.getResourceGeneric(), specificResource, ORole.PERMISSION_READ));
-          json.writeAttribute(4, false, "update", role.allow(rule.getResourceGeneric(), specificResource, ORole.PERMISSION_UPDATE));
-          json.writeAttribute(4, false, "delete", role.allow(rule.getResourceGeneric(), specificResource, ORole.PERMISSION_DELETE));
-          json.endObject(4, true);
-        }
+      for (Map.Entry<String, Byte> rule : role.getRules().entrySet()) {
+        json.beginObject(4);
+        json.writeAttribute(4, true, "name", rule.getKey());
+        json.writeAttribute(4, false, "create", role.allow(rule.getKey(), ORole.PERMISSION_CREATE));
+        json.writeAttribute(4, false, "read", role.allow(rule.getKey(), ORole.PERMISSION_READ));
+        json.writeAttribute(4, false, "update", role.allow(rule.getKey(), ORole.PERMISSION_UPDATE));
+        json.writeAttribute(4, false, "delete", role.allow(rule.getKey(), ORole.PERMISSION_DELETE));
+        json.endObject(4, true);
       }
       json.endCollection(3, false);
 
@@ -206,8 +196,8 @@ public class OServerCommandPostDatabase extends OServerCommandAuthenticatedServe
     json.endCollection(2, true);
 
     json.beginCollection(2, true, "properties");
-    if (db.getStorage().getConfiguration().properties != null)
-      for (OStorageEntryConfiguration entry : db.getStorage().getConfiguration().properties) {
+    if (db.getStorage().getConfiguration().getProperties() != null)
+      for (OStorageEntryConfiguration entry : db.getStorage().getConfiguration().getProperties()) {
         if (entry != null) {
           json.beginObject(3, true, null);
           json.writeAttribute(4, false, "name", entry.name);
@@ -275,11 +265,6 @@ public class OServerCommandPostDatabase extends OServerCommandAuthenticatedServe
     }
 
     json.endObject(1, false);
-  }
-
-  @Override
-  public String[] getNames() {
-    return NAMES;
   }
 
 }

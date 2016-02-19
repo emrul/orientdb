@@ -19,9 +19,8 @@
  */
 package com.orientechnologies.orient.graph.sql;
 
-import java.util.*;
-import java.util.Map.Entry;
-
+import com.orientechnologies.common.types.OModifiableBoolean;
+import com.orientechnologies.common.util.OPair;
 import com.orientechnologies.orient.core.command.OCommandDistributedReplicateRequest;
 import com.orientechnologies.orient.core.command.OCommandRequest;
 import com.orientechnologies.orient.core.command.OCommandRequestText;
@@ -29,12 +28,22 @@ import com.orientechnologies.orient.core.db.document.ODatabaseDocument;
 import com.orientechnologies.orient.core.db.record.OIdentifiable;
 import com.orientechnologies.orient.core.exception.OCommandExecutionException;
 import com.orientechnologies.orient.core.id.ORID;
+import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.impl.ODocument;
-import com.orientechnologies.orient.core.sql.*;
+import com.orientechnologies.orient.core.sql.OCommandExecutorSQLSetAware;
+import com.orientechnologies.orient.core.sql.OCommandParameters;
+import com.orientechnologies.orient.core.sql.OCommandSQLParsingException;
+import com.orientechnologies.orient.core.sql.OSQLEngine;
+import com.orientechnologies.orient.core.sql.OSQLHelper;
 import com.orientechnologies.orient.core.sql.functions.OSQLFunctionRuntime;
-import com.tinkerpop.blueprints.impls.orient.OrientGraphNoTx;
+import com.tinkerpop.blueprints.impls.orient.OrientGraph;
 import com.tinkerpop.blueprints.impls.orient.OrientVertex;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * SQL MOVE VERTEX command.
@@ -43,13 +52,16 @@ import com.tinkerpop.blueprints.impls.orient.OrientVertex;
  * 
  */
 public class OCommandExecutorSQLMoveVertex extends OCommandExecutorSQLSetAware implements OCommandDistributedReplicateRequest {
-  public static final String            NAME          = "MOVE VERTEX";
-  private static final String           KEYWORD_MERGE = "MERGE";
-  private String                        source        = null;
-  private String                        clusterName;
-  private String                        className;
-  private LinkedHashMap<String, Object> fields;
-  private ODocument                     merge;
+  public static final String          NAME          = "MOVE VERTEX";
+  private static final String         KEYWORD_MERGE = "MERGE";
+  private static final String         KEYWORD_BATCH = "BATCH";
+  private String                      source        = null;
+  private String                      clusterName;
+  private String                      className;
+  private OClass                      clazz;
+  private List<OPair<String, Object>> fields;
+  private ODocument                   merge;
+  private int                         batch         = 100;
 
   @SuppressWarnings("unchecked")
   public OCommandExecutorSQLMoveVertex parse(final OCommandRequest iRequest) {
@@ -83,16 +95,22 @@ public class OCommandExecutorSQLMoveVertex extends OCommandExecutorSQLSetAware i
 
         className = temp.substring("CLASS:".length());
 
-        if (!database.getMetadata().getImmutableSchemaSnapshot().existsClass(className))
-          throw new OCommandSQLParsingException("Class " + className + " was not found");
+        clazz = database.getMetadata().getSchema().getClass(className);
+
+        if (clazz == null)
+          throw new OCommandSQLParsingException("Class '" + className + "' was not found");
 
       } else if (temp.equals(KEYWORD_SET)) {
-        fields = new LinkedHashMap<String, Object>();
-        parseSetFields(fields);
+        fields = new ArrayList<OPair<String, Object>>();
+        parseSetFields(clazz, fields);
 
       } else if (temp.equals(KEYWORD_MERGE)) {
         merge = parseJSON();
 
+      } else if (temp.equals(KEYWORD_BATCH)) {
+        temp = parserNextWord(true);
+        if (temp != null)
+          batch = Integer.parseInt(temp);
       }
 
       temp = parserOptionalWord(true);
@@ -110,45 +128,70 @@ public class OCommandExecutorSQLMoveVertex extends OCommandExecutorSQLSetAware i
     if (className == null && clusterName == null)
       throw new OCommandExecutionException("Cannot execute the command because it has not been parsed yet");
 
-    final OrientGraphNoTx graph = OGraphCommandExecutorSQLFactory.getGraphNoTx();
+    OModifiableBoolean shutdownGraph = new OModifiableBoolean();
+    final boolean txAlreadyBegun = getDatabase().getTransaction().isActive();
+    final OrientGraph graph = OGraphCommandExecutorSQLFactory.getGraph(true, shutdownGraph);
+    try {
+      final Set<OIdentifiable> sourceRIDs = OSQLEngine.getInstance().parseRIDTarget(graph.getRawGraph(), source, context, iArgs);
 
-    final Set<OIdentifiable> sourceRIDs = OSQLEngine.getInstance().parseRIDTarget(graph.getRawGraph(), source, context, iArgs);
+      // CREATE EDGES
+      final List<ODocument> result = new ArrayList<ODocument>(sourceRIDs.size());
 
-    // CREATE EDGES
-    final List<ODocument> result = new ArrayList<ODocument>(sourceRIDs.size());
+      for (OIdentifiable from : sourceRIDs) {
+        final OrientVertex fromVertex = graph.getVertex(from);
+        if (fromVertex == null)
+          continue;
 
-    for (OIdentifiable from : sourceRIDs) {
-      final OrientVertex fromVertex = graph.getVertex(from);
-      if (fromVertex == null)
-        continue;
+        final ORID oldVertex = fromVertex.getIdentity().copy();
+        final ORID newVertex = fromVertex.moveTo(className, clusterName);
 
-      final ORID oldVertex = fromVertex.getIdentity().copy();
-      final ORID newVertex = fromVertex.moveTo(className, clusterName);
+        final ODocument newVertexDoc = newVertex.getRecord();
 
-      if (fields != null)
-        // EVALUATE FIELDS
-        for (Entry<String, Object> f : fields.entrySet()) {
-          if (f.getValue() instanceof OSQLFunctionRuntime)
-            fields.put(f.getKey(), ((OSQLFunctionRuntime) f.getValue()).getValue(newVertex.getRecord(), null, context));
+        if (fields != null) {
+          // EVALUATE FIELDS
+          for (final OPair<String, Object> f : fields) {
+            if (f.getValue() instanceof OSQLFunctionRuntime)
+              f.setValue(((OSQLFunctionRuntime) f.getValue()).getValue(newVertex.getRecord(), null, context));
+          }
+
+          OSQLHelper.bindParameters(newVertexDoc, fields, new OCommandParameters(iArgs), context);
         }
 
-      OSQLHelper.bindParameters(fromVertex.getRecord(), fields, new OCommandParameters(iArgs), context);
+        if (merge != null)
+          newVertexDoc.merge(merge, true, false);
 
-      if (merge != null)
-        fromVertex.getRecord().merge(merge, true, false);
+        // SAVE CHANGES
+        newVertexDoc.save();
 
-      // SAVE CHANGES
-      fromVertex.save();
+        // PUT THE MOVE INTO THE RESULT
+        result.add(new ODocument().setTrackingChanges(false).field("old", oldVertex, OType.LINK)
+            .field("new", newVertex, OType.LINK));
 
-      // PUT THE MOVE INTO THE RESULT
-      result.add(new ODocument().field("old", oldVertex, OType.LINK).field("new", newVertex, OType.LINK));
+        if (batch > 0 && result.size() % batch == 0) {
+          graph.commit();
+          graph.begin();
+        }
+      }
+
+      graph.commit();
+
+      return result;
+    } finally {
+      if (!txAlreadyBegun)
+        graph.commit();
+
+      if (shutdownGraph.getValue())
+        graph.shutdown(false);
     }
+  }
 
-    return result;
+  @Override
+  public QUORUM_TYPE getQuorumType() {
+    return QUORUM_TYPE.WRITE;
   }
 
   @Override
   public String getSyntax() {
-    return "MOVE VERTEX <source> TO <destination> [SET [<field>=<value>]* [,]] [MERGE <JSON>]";
+    return "MOVE VERTEX <source> TO <destination> [SET [<field>=<value>]* [,]] [MERGE <JSON>] [BATCH <batch-size>]";
   }
 }

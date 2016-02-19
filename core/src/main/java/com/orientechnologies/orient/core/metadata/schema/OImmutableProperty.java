@@ -1,52 +1,124 @@
 package com.orientechnologies.orient.core.metadata.schema;
 
+import java.util.Calendar;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import com.orientechnologies.orient.core.collate.OCollate;
 import com.orientechnologies.orient.core.index.OIndex;
 import com.orientechnologies.orient.core.index.OIndexDefinition;
-
-import java.util.*;
+import com.orientechnologies.orient.core.metadata.schema.validation.ValidationBinaryComparable;
+import com.orientechnologies.orient.core.metadata.schema.validation.ValidationCollectionComparable;
+import com.orientechnologies.orient.core.metadata.schema.validation.ValidationMapComparable;
+import com.orientechnologies.orient.core.metadata.schema.validation.ValidationStringComparable;
 
 /**
- * @author Andrey Lomakin <a href="mailto:lomakin.andrey@gmail.com">Andrey Lomakin</a>
+ * @author Andrey Lomakin (a.lomakin-at-orientechnologies.com)
  * @since 10/21/14
  */
 public class OImmutableProperty implements OProperty {
   private final String              name;
   private final String              fullName;
   private final OType               type;
-  private final OClass              linkedClass;
+
+  // do not make it volatile it is already thread safe.
+  private OClass                    linkedClass = null;
+
+  private final String              linkedClassName;
+
   private final OType               linkedType;
   private final boolean             notNull;
   private final OCollate            collate;
   private final boolean             mandatory;
   private final String              min;
   private final String              max;
+  private final String              defaultValue;
   private final String              regexp;
   private final Map<String, String> customProperties;
   private final OClass              owner;
   private final Integer             id;
   private final boolean             readOnly;
+  private final Comparable<Object>  minComparable;
+  private final Comparable<Object>  maxComparable;
 
-  public OImmutableProperty(OProperty property) {
+  public OImmutableProperty(OProperty property, OImmutableClass owner) {
     name = property.getName();
     fullName = property.getFullName();
     type = property.getType();
-    linkedClass = property.getLinkedClass();
+
+    if (property.getLinkedClass() != null)
+      linkedClassName = property.getLinkedClass().getName();
+    else
+      linkedClassName = null;
+
     linkedType = property.getLinkedType();
     notNull = property.isNotNull();
     collate = property.getCollate();
     mandatory = property.isMandatory();
     min = property.getMin();
     max = property.getMax();
+    defaultValue = property.getDefaultValue();
     regexp = property.getRegexp();
     customProperties = new HashMap<String, String>();
 
     for (String key : property.getCustomKeys())
       customProperties.put(key, property.getCustom(key));
 
-    owner = property.getOwnerClass();
+    this.owner = owner;
     id = property.getId();
     readOnly = property.isReadonly();
+
+    if (min != null) {
+      if (type.equals(OType.STRING))
+        minComparable = new ValidationStringComparable((Integer) OType.convert(min, Integer.class));
+      else if (type.equals(OType.BINARY))
+        minComparable = new ValidationBinaryComparable((Integer) OType.convert(min, Integer.class));
+      else if (type.equals(OType.DATE) || type.equals(OType.BYTE) || type.equals(OType.SHORT) || type.equals(OType.INTEGER)
+          || type.equals(OType.LONG) || type.equals(OType.FLOAT) || type.equals(OType.DOUBLE) || type.equals(OType.DECIMAL)
+          || type.equals(OType.DATETIME))
+        minComparable = (Comparable<Object>) OType.convert(min, type.getDefaultJavaType());
+      else if (type.equals(OType.EMBEDDEDLIST) || type.equals(OType.EMBEDDEDSET) || type.equals(OType.LINKLIST)
+          || type.equals(OType.LINKSET))
+        minComparable = new ValidationCollectionComparable((Integer) OType.convert(min, Integer.class));
+      else if (type.equals(OType.EMBEDDEDMAP) || type.equals(OType.LINKMAP))
+        minComparable = new ValidationMapComparable((Integer) OType.convert(min, Integer.class));
+      else
+        minComparable = null;
+    } else
+      minComparable = null;
+
+    if (max != null) {
+      if (type.equals(OType.STRING))
+        maxComparable = new ValidationStringComparable((Integer) OType.convert(max, Integer.class));
+      else if (type.equals(OType.BINARY))
+        maxComparable = new ValidationBinaryComparable((Integer) OType.convert(max, Integer.class));
+      else if (type.equals(OType.DATE)) {
+        // This is needed because a date is valid in any time range of the day.
+        Date maxDate = (Date) OType.convert(max, OType.DATE.getDefaultJavaType());
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(maxDate);
+        cal.add(Calendar.DAY_OF_MONTH, 1);
+        maxDate = new Date(cal.getTime().getTime() - 1);
+        maxComparable = (Comparable) maxDate;
+      } else if (type.equals(OType.BYTE) || type.equals(OType.SHORT) || type.equals(OType.INTEGER) || type.equals(OType.LONG)
+          || type.equals(OType.FLOAT) || type.equals(OType.DOUBLE) || type.equals(OType.DECIMAL) || type.equals(OType.DATETIME))
+        maxComparable = (Comparable<Object>) OType.convert(max, type.getDefaultJavaType());
+      else if (type.equals(OType.EMBEDDEDLIST) || type.equals(OType.EMBEDDEDSET) || type.equals(OType.LINKLIST)
+          || type.equals(OType.LINKSET))
+        maxComparable = new ValidationCollectionComparable((Integer) OType.convert(max, Integer.class));
+      else if (type.equals(OType.EMBEDDEDMAP) || type.equals(OType.LINKMAP))
+        maxComparable = new ValidationMapComparable((Integer) OType.convert(max, Integer.class));
+      else
+        maxComparable = null;
+    } else {
+      maxComparable = null;
+    }
   }
 
   @Override
@@ -76,6 +148,15 @@ public class OImmutableProperty implements OProperty {
 
   @Override
   public OClass getLinkedClass() {
+    if (linkedClassName == null)
+      return null;
+
+    if (linkedClass != null)
+      return linkedClass;
+
+    OSchema schema = ((OImmutableClass) owner).getSchema();
+    linkedClass = schema.getClass(linkedClassName);
+
     return linkedClass;
   }
 
@@ -156,6 +237,16 @@ public class OImmutableProperty implements OProperty {
 
   @Override
   public OProperty setMax(String max) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public String getDefaultValue() {
+    return defaultValue;
+  }
+
+  @Override
+  public OProperty setDefaultValue(String defaultValue) {
     throw new UnsupportedOperationException();
   }
 
@@ -269,6 +360,8 @@ public class OImmutableProperty implements OProperty {
       return isReadonly();
     case MAX:
       return getMax();
+    case DEFAULT:
+      return getDefaultValue();
     case NAME:
       return getName();
     case NOTNULL:
@@ -322,5 +415,13 @@ public class OImmutableProperty implements OProperty {
   @Override
   public String toString() {
     return getName() + " (type=" + getType() + ")";
+  }
+
+  public Comparable<Object> getMaxComparable() {
+    return maxComparable;
+  }
+
+  public Comparable<Object> getMinComparable() {
+    return minComparable;
   }
 }
